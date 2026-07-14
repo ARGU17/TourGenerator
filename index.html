@@ -7,9 +7,6 @@
   <meta name="description" content="Generador procedural de etapas ciclistas de Gran Vuelta con perfiles altimétricos, terreno 3D y exportación GPX." />
   <title>Grand Tour Stage Lab</title>
 
-  <link rel="preconnect" href="https://unpkg.com" crossorigin>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -192,16 +189,17 @@
 
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
-  <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <!-- Dependencia local: la exportación ZIP funciona incluso si un CDN está bloqueado. -->
+  <script defer src="vendor/jszip.min.js"></script>
 
-  <script src="config.js"></script>
-  <script src="js/catalog.js"></script>
-  <script src="js/generator.js"></script>
-  <script src="js/export.js"></script>
-  <script src="js/profile.js"></script>
-  <script src="js/map3d.js"></script>
-  <script src="js/app.js"></script>
+  <!-- Núcleo local. No depende de Internet para generar, visualizar o exportar etapas. -->
+  <script defer src="config.js"></script>
+  <script defer src="js/vendor-loader.js"></script>
+  <script defer src="js/catalog.js"></script>
+  <script defer src="js/generator.js"></script>
+  <script defer src="js/export.js"></script>
+  <script defer src="js/profile.js"></script>
+  <script defer src="js/map3d.js"></script>
+  <script defer src="js/app.js"></script>
 </body>
 </html>

@@ -833,7 +833,9 @@
     const itt = get(/(\d+)\s*(?:etapas?\s*)?(?:cri|contrarreloj(?:es)?(?:\s+individuales)?)/);
     const summit = get(/(\d+)\s*final(?:es)?\s+en\s+alto/);
     const maxStage = get(/(?:maximo|max\.?)\s*(?:de\s*)?(\d+)\s*km/);
-    const total = get(/(?:total(?:es)?|recorrido\s+total|distancia\s+total)(?:\s+de)?\s*(\d+)\s*km/);
+    const totalBefore = get(/(?:total(?:es)?|recorrido\s+total|distancia\s+total)(?:\s+de)?\s*(\d+)\s*km/);
+    const totalAfter = get(/(?:^|[,;\s])(?:de\s+)?(\d+)\s*km\s*(?:totales?|en\s+total)/);
+    const total = totalBefore ?? totalAfter;
     const seed = get(/semilla(?:\s+de)?\s*(\d+)/);
 
     if (stages !== null) config.stageCount = stages;

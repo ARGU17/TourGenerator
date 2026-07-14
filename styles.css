@@ -385,3 +385,70 @@ body::before {
   .profile-legend { display: grid; grid-template-columns: repeat(2, auto); }
   .field-grid.two { grid-template-columns: 1fr 1fr; }
 }
+
+/* v1.1 — visores locales no bloqueantes ----------------------------------- */
+.fallback-3d-active { overflow: hidden; background: #071018; }
+.fallback-3d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.fallback-mode-label {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  z-index: 4;
+  padding: 4px 7px;
+  border: 1px solid rgba(114, 240, 168, .24);
+  border-radius: 999px;
+  background: rgba(5, 11, 17, .74);
+  color: rgba(114, 240, 168, .82);
+  font-size: 8px;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: .09em;
+  pointer-events: none;
+}
+.map-fallback-label { top: 12px; right: 13px; }
+
+.profile-render-root { position: relative; overflow: hidden; }
+.profile-fallback { position: relative; width: 100%; height: 100%; min-height: 190px; }
+.profile-fallback svg { width: 100%; height: 100%; display: block; }
+.profile-fallback .pf-grid { stroke: rgba(142,180,205,.085); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.profile-fallback .pf-axis { fill: #8ba1b2; font: 10px var(--font); }
+.profile-fallback .pf-axis-title { fill: #607586; font: 800 9px var(--font); letter-spacing: .08em; }
+.profile-fallback .pf-outline { fill: none; stroke: rgba(1,5,8,.9); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.profile-fallback .pf-segment { stroke-width: 3.4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.profile-fallback .pf-climb-line { stroke: rgba(255,159,67,.24); stroke-width: 1; stroke-dasharray: 4 5; vector-effect: non-scaling-stroke; }
+.profile-fallback .pf-climb-dot { fill: #ff9f43; stroke: #071018; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.profile-fallback .pf-climb-cat { fill: #071018; font: 900 8px var(--font); }
+.profile-fallback .pf-sprint-line { stroke: rgba(114,240,168,.22); stroke-width: 1; stroke-dasharray: 4 5; vector-effect: non-scaling-stroke; }
+.profile-fallback .pf-sprint-dot { fill: #72f0a8; stroke: #071018; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.profile-fallback .pf-sprint-label { fill: #071018; font: 900 8px var(--font); }
+.profile-fallback .pf-hover-line { stroke: rgba(255,255,255,.58); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.profile-fallback .pf-hover-dot { fill: #f1f6f9; stroke: #071018; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.profile-fallback-tooltip {
+  position: absolute;
+  z-index: 6;
+  min-width: 112px;
+  padding: 8px 9px;
+  border: 1px solid rgba(142,180,205,.28);
+  border-radius: 8px;
+  background: rgba(5,12,18,.95);
+  box-shadow: 0 10px 30px rgba(0,0,0,.32);
+  pointer-events: none;
+  font-size: 10px;
+}
+.profile-fallback-tooltip strong, .profile-fallback-tooltip span { display: block; }
+.profile-fallback-tooltip span { margin-top: 3px; color: var(--muted); }
+
+/* Controles básicos si la hoja de estilos de MapLibre no está disponible. */
+.maplibregl-map { position: relative; overflow: hidden; -webkit-tap-highlight-color: rgb(0 0 0 / 0); }
+.maplibregl-canvas { position: absolute; left: 0; top: 0; }
+.maplibregl-control-container { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.maplibregl-ctrl-top-right { position: absolute; top: 10px; right: 10px; pointer-events: auto; }
+.maplibregl-ctrl-bottom-left { position: absolute; left: 10px; bottom: 10px; pointer-events: auto; }
+.maplibregl-ctrl-bottom-right { position: absolute; right: 10px; bottom: 10px; pointer-events: auto; }
+.maplibregl-ctrl { clear: both; pointer-events: auto; }
+.maplibregl-ctrl-group { border-radius: 8px; overflow: hidden; }
+.maplibregl-ctrl-group button { width: 29px; height: 29px; display: block; border: 0; background: rgba(8,20,30,.88); cursor: pointer; }
+.maplibregl-ctrl-attrib { padding: 2px 5px; border-radius: 4px; font-size: 9px; }
+.maplibregl-marker { position: absolute; top: 0; left: 0; will-change: transform; }
+.maplibregl-popup { position: absolute; top: 0; left: 0; display: flex; pointer-events: none; }
+.maplibregl-popup-content { padding: 9px 11px; border-radius: 8px; background: #f1f6f9; color: #071018; font-size: 11px; box-shadow: 0 8px 30px rgba(0,0,0,.35); pointer-events: auto; }

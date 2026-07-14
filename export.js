@@ -105,7 +105,7 @@
   }
 
   async function downloadTourZip(tour) {
-    if (!window.JSZip) throw new Error('JSZip no está disponible. Comprueba la conexión a Internet.');
+    if (!window.JSZip) throw new Error('JSZip no está disponible. Comprueba que has subido la carpeta /vendor completa.');
     const zip = new JSZip();
     const root = zip.folder(slugify(tour.title));
     const gpxFolder = root.folder('gpx');

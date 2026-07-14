@@ -2,12 +2,29 @@
 
 Aplicación web estática para generar vueltas ciclistas de **1 a 30 etapas** en Francia, España, Italia o combinando los tres países.
 
-Incluye:
+## Versión 1.1 — corrección de arranque
+
+Esta versión corrige el fallo por el que la interfaz HTML aparecía, pero el libro de ruta quedaba vacío y los botones no respondían.
+
+La causa principal era que las bibliotecas externas se cargaban de manera bloqueante antes del núcleo local. Cuando GitHub Pages, el navegador, una red corporativa o un bloqueador no podía resolver alguno de esos CDN, el navegador no alcanzaba `app.js`; por tanto, no se generaban etapas ni se enlazaban los eventos de los botones.
+
+Cambios aplicados:
+
+- Los scripts locales arrancan antes que las dependencias visuales opcionales.
+- Ningún fallo de MapLibre o ECharts puede bloquear los botones.
+- Se incorpora un perfil SVG interactivo local, sin dependencia de Internet.
+- Se incorpora una vista 2.5D/3D Canvas local, sin dependencia de Internet.
+- MapLibre y ECharts se cargan después, de forma asíncrona, y mejoran los visores si están disponibles.
+- JSZip se incluye dentro de `/vendor`, por lo que la exportación ZIP ya no depende de un CDN.
+- El generador, los condicionantes, la regeneración y el GPX funcionan totalmente offline.
+- Se añade una prueba automática ejecutable con `npm test`.
+
+## Funcionalidades
 
 - Generación de vueltas de 21 etapas con reparto realista entre llano, media montaña, alta montaña y contrarreloj.
 - Catálogo geográfico con regiones, ciudades y puertos reales de Francia, España e Italia.
 - Perfil altimétrico interactivo, coloreado por pendiente y con puertos/sprint señalados.
-- Visualización 3D sobre terreno real con MapLibre GL JS.
+- Visualización local 3D/2.5D y mejora opcional sobre terreno cartográfico con MapLibre GL JS.
 - Animación de un corredor recorriendo la etapa.
 - Regeneración de una etapa concreta sin modificar el resto de la vuelta.
 - Interpretación de condicionantes escritos en español.
@@ -15,40 +32,54 @@ Incluye:
 - Exportación individual GPX y exportación completa ZIP con GPX + JSON + manifiesto.
 - Despliegue automático en GitHub Pages.
 
-## Funcionamiento de los dos modos
+## Funcionamiento de los modos
 
-### 1. Datos incluidos
+### 1. Datos incluidos — siempre disponible
 
-La aplicación funciona inmediatamente, sin claves API. Genera rutas geográficas coherentes a partir de ciudades y puertos reales del catálogo, con perfiles altimétricos procedurales calibrados para cada tipo de etapa.
+La aplicación funciona inmediatamente, sin claves API y aunque el navegador no tenga acceso a los CDN. Genera rutas geográficas coherentes a partir de ciudades y puertos reales del catálogo, con perfiles altimétricos procedurales calibrados para cada tipo de etapa.
 
-Este modo garantiza que la interfaz siempre funciona incluso si el servicio de routing no está disponible.
+El perfil local y el visor 3D local también funcionan sin conexión. En la esquina de cada visualizador se muestra `PERFIL LOCAL` o `3D LOCAL` cuando se está usando este modo resistente a fallos.
 
-### 2. Carreteras reales
+### 2. Visualización cartográfica mejorada — opcional
+
+Tras arrancar el núcleo, la aplicación intenta cargar MapLibre y ECharts de forma asíncrona. Si las bibliotecas y los tiles externos están disponibles, los visores se actualizan automáticamente. Si no están disponibles, la aplicación conserva los visores locales y el resto de funciones continúa operativo.
+
+### 3. Carreteras reales — requiere servicio Valhalla
 
 El botón **Carreteras reales** sustituye la geometría incluida por una ruta calculada sobre la red ciclable de OpenStreetMap usando Valhalla.
 
 El botón **Enrutar 21 etapas** procesa toda la vuelta secuencialmente y conserva automáticamente la versión incluida de las etapas que no puedan enrutarse.
 
-El endpoint predeterminado es el servidor demostrativo público de FOSSGIS:
+Endpoint predeterminado:
 
 `https://valhalla1.openstreetmap.de/route`
 
-Es adecuado para pruebas y uso moderado. Para una aplicación pública con muchos usuarios se recomienda desplegar Valhalla propio o usar un proxy/control de cuota.
+Es un servicio externo. Puede fallar por límites de uso, CORS, indisponibilidad temporal o políticas de la red. Ese fallo ya no impide generar ni visualizar las etapas incluidas.
 
-## Subir directamente a GitHub Pages
+## Sustituir la versión anterior en GitHub
 
-1. Crea un repositorio nuevo en GitHub.
-2. Sube **todo el contenido de esta carpeta a la raíz del repositorio**.
+1. Conserva una copia del repositorio anterior si contiene cambios propios.
+2. Descomprime este ZIP.
+3. Sustituye **todos** los archivos del repositorio por el contenido de esta carpeta.
+4. Comprueba especialmente que existen:
+   - `js/vendor-loader.js`
+   - `vendor/jszip.min.js`
+   - las carpetas completas `js/`, `vendor/` y `.github/`
+5. Haz commit y push.
+6. En GitHub abre `Actions` y espera a que finalice **Deploy GitHub Pages**.
+7. Recarga la web con `Ctrl+F5` para evitar que el navegador reutilice el JavaScript antiguo.
+
+No hay que ejecutar `npm install` para publicar la aplicación.
+
+## Publicación nueva en GitHub Pages
+
+1. Crea un repositorio nuevo.
+2. Sube **todo el contenido de esta carpeta a la raíz**.
 3. Abre `Settings` → `Pages`.
 4. En `Build and deployment`, selecciona `GitHub Actions`.
-5. Haz un commit o ejecuta manualmente el workflow `Deploy GitHub Pages`.
-6. GitHub publicará la URL de la aplicación en la pestaña `Actions` y en `Settings` → `Pages`.
-
-No hay que ejecutar `npm install`, no hay proceso de build y no se necesita backend para el modo básico.
+5. Ejecuta o espera al workflow `Deploy GitHub Pages`.
 
 ## Ejemplos de condicionantes
-
-El campo de lenguaje natural admite peticiones como:
 
 - `21 etapas en España, 7 llanas, 5 de alta montaña, 2 CRI y 4 finales en alto.`
 - `18 etapas en Francia, 3000 km totales y máximo 205 km por etapa.`
@@ -57,6 +88,22 @@ El campo de lenguaje natural admite peticiones como:
 
 Tras pulsar **Interpretar condicionantes**, los valores detectados se trasladan al formulario. Después se pulsa **Generar nueva vuelta**.
 
+## Pruebas
+
+No son necesarias para desplegar, pero permiten validar el generador localmente si Node.js está instalado:
+
+```bash
+npm test
+```
+
+La prueba cubre:
+
+- Francia, España, Italia y vuelta europea.
+- Varias semillas.
+- Validez de puntos, distancia y desnivel.
+- Interpretación de condicionantes.
+- Creación del contenido GPX 1.1.
+
 ## Estructura
 
 ```text
@@ -64,13 +111,19 @@ Tras pulsar **Interpretar condicionantes**, los valores detectados se trasladan 
 ├── index.html
 ├── styles.css
 ├── config.js
+├── package.json
 ├── js/
+│   ├── vendor-loader.js
 │   ├── catalog.js
 │   ├── generator.js
 │   ├── map3d.js
 │   ├── profile.js
 │   ├── export.js
 │   └── app.js
+├── vendor/
+│   └── jszip.min.js
+├── tests/
+│   └── smoke-test.js
 ├── worker/
 │   ├── valhalla-proxy.js
 │   └── wrangler.toml.example
@@ -80,52 +133,44 @@ Tras pulsar **Interpretar condicionantes**, los valores detectados se trasladan 
 └── README.md
 ```
 
-## Configuración
+## Configuración externa
 
-Los parámetros externos están en `config.js`:
+Los parámetros están en `config.js`:
 
 ```js
 window.APP_CONFIG = {
+  version: '1.1.0-fixed',
   valhallaEndpoint: 'https://valhalla1.openstreetmap.de/route',
-  valhallaClientId: 'grand-tour-stage-lab.github.io',
   terrainTileJson: 'https://tiles.mapterhorn.com/tilejson.json',
   routeRequestDelayMs: 1200,
   elevationIntervalM: 30
 };
 ```
 
-Se puede cambiar `valhallaEndpoint` por una instancia propia o por un proxy.
+Puede cambiarse `valhallaEndpoint` por una instancia propia o por el proxy opcional incluido en `worker/`.
 
-## Proxy opcional con Cloudflare Worker
+## Diagnóstico rápido
 
-La carpeta `worker/` contiene un proxy mínimo para:
+Si vuelve a aparecer solo la estructura vacía:
 
-- Evitar problemas CORS.
-- Añadir el identificador `X-Client-Id` en el servidor.
-- Centralizar el endpoint de Valhalla.
-- Sustituir en el futuro el servidor demostrativo por una instancia privada.
+1. Abre las herramientas de desarrollo del navegador (`F12`).
+2. Revisa `Console` y `Network`.
+3. Comprueba que `js/app.js`, `js/generator.js`, `js/catalog.js` y `vendor/jszip.min.js` responden con HTTP 200.
+4. Comprueba que GitHub no ha colocado la aplicación dentro de una subcarpeta adicional.
+5. Fuerza una recarga con `Ctrl+F5`.
 
-Pasos básicos:
+La aplicación expone `window.GT_STAGE_LAB` después de arrancar. En la consola, esta comprobación debe devolver `true`:
 
-1. Instala Wrangler: `npm install -g wrangler`.
-2. Copia `worker/wrangler.toml.example` como `worker/wrangler.toml`.
-3. Entra en `worker/` y ejecuta `wrangler deploy`.
-4. Introduce la URL resultante en el campo `Endpoint Valhalla` de la aplicación o en `config.js`.
+```js
+Boolean(window.GT_STAGE_LAB && window.GT_STAGE_LAB.state.tour)
+```
 
 ## Datos y atribución
 
 - Cartografía base: © OpenStreetMap contributors.
 - Routing real: Valhalla sobre datos OpenStreetMap.
-- Terreno 3D: Mapterhorn DEM tiles, según disponibilidad del servicio.
-- Visualización: MapLibre GL JS y Apache ECharts.
-
-## Consideraciones técnicas
-
-- Las rutas reales dependen de la cobertura y etiquetado de OpenStreetMap.
-- El routing puede modificar de forma significativa la distancia objetivo cuando los puertos o puntos intermedios obligan a rodeos.
-- El servidor público de Valhalla aplica límites de uso razonable.
-- Los tracks reales se generan al pulsar el botón correspondiente; el ZIP exporta exactamente la geometría actualmente visible en cada etapa.
-- La semilla permite reproducir una vuelta generada con los mismos parámetros.
+- Terreno cartográfico: Mapterhorn DEM tiles, sujeto a disponibilidad del servicio.
+- Visualización opcional: MapLibre GL JS y Apache ECharts.
 
 ## Licencia
 

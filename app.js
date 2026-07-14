@@ -173,8 +173,8 @@
       metric(stage.routeStatus === 'real' ? 'OSM real' : 'Incluido', 'Geometría')
     ].join('');
     el.routeStageBtn.textContent = stage.routeStatus === 'real' ? 'Recalcular ruta' : 'Carreteras reales';
-    ProfileView.render(stage);
-    Map3DView.render(stage);
+    try { window.ProfileView?.render(stage); } catch (error) { console.warn('Perfil no disponible', error); }
+    try { window.Map3DView?.render(stage); } catch (error) { console.warn('Visor 3D no disponible', error); }
   }
 
   function selectStage(index) {
@@ -185,14 +185,27 @@
   async function generateTour(configOverride) {
     const config = configOverride || readConfig();
     savePreferences();
-    state.selectedIndex = 0;
-    state.regenerateCounter = 0;
-    state.tour = StageGenerator.generateTour(config);
-    renderTour();
-    setRoutingBadge('demo', 'Datos incluidos');
-    toast(`Vuelta generada: ${state.tour.stages.length} etapas y semilla ${state.tour.config.seed}.`, 'success');
-
-    if (el.autoRouteNewStages.checked) await routeAllStages();
+    el.generateTourBtn.disabled = true;
+    el.generateFromPanelBtn.disabled = true;
+    setRoutingBadge('busy', 'Generando etapas');
+    try {
+      state.selectedIndex = 0;
+      state.regenerateCounter = 0;
+      state.tour = window.StageGenerator.generateTour(config);
+      renderTour();
+      setRoutingBadge('demo', 'Datos incluidos');
+      toast(`Vuelta generada: ${state.tour.stages.length} etapas y semilla ${state.tour.config.seed}.`, 'success');
+      if (el.autoRouteNewStages.checked) await routeAllStages();
+    } catch (error) {
+      console.error('[Grand Tour Stage Lab] Error al generar la vuelta', error);
+      setRoutingBadge('error', 'Error de generación');
+      toast(`No se pudo generar la vuelta: ${error.message}`, 'error', 7000);
+    } finally {
+      if (!state.routeAllRunning) {
+        el.generateTourBtn.disabled = false;
+        el.generateFromPanelBtn.disabled = false;
+      }
+    }
   }
 
   function regenerateSelectedStage() {
@@ -360,16 +373,63 @@
       .replace(/'/g, '&#039;');
   }
 
+  function initOptionalViews() {
+    try {
+      window.Map3DView?.init('map', 'mapMessage', (running) => {
+        el.playRouteBtn.textContent = running ? '■ Detener' : '▶ Recorrer';
+      });
+    } catch (error) {
+      console.warn('[Grand Tour Stage Lab] El visor 3D ha arrancado en modo degradado.', error);
+    }
+    try {
+      window.ProfileView?.init('profileChart', (point) => window.Map3DView?.highlightPoint(point));
+    } catch (error) {
+      console.warn('[Grand Tour Stage Lab] El perfil ha arrancado en modo degradado.', error);
+    }
+  }
+
+  function loadOptionalVendors() {
+    window.addEventListener('gt-vendor-maplibre', (event) => {
+      if (event.detail?.status === 'ready') {
+        const upgraded = window.Map3DView?.upgrade?.();
+        if (upgraded && state.tour) window.Map3DView.render(state.tour.stages[state.selectedIndex]);
+      }
+    });
+    window.addEventListener('gt-vendor-echarts', (event) => {
+      if (event.detail?.status === 'ready') {
+        const upgraded = window.ProfileView?.upgrade?.();
+        if (upgraded && state.tour) window.ProfileView.render(state.tour.stages[state.selectedIndex]);
+      }
+    });
+    const vendorPromise = window.VendorLoader?.loadAll?.();
+    if (vendorPromise && typeof vendorPromise.then === 'function') {
+      vendorPromise.then((result) => {
+        if (result?.maplibre === 'fallback' || result?.echarts === 'fallback') {
+          console.info('[Grand Tour Stage Lab] Se mantienen los visores locales porque uno o más CDN no están disponibles.');
+        }
+      }).catch((error) => console.warn('Carga opcional de librerías', error));
+    }
+  }
+
   function boot() {
     cacheElements();
     restorePreferences();
-    ProfileView.init('profileChart', (point) => Map3DView.highlightPoint(point));
-    Map3DView.init('map', 'mapMessage', (running) => {
-      el.playRouteBtn.textContent = running ? '■ Detener' : '▶ Recorrer';
-    });
+
+    // Se enlazan primero los controles: un fallo del mapa o de una CDN nunca vuelve a bloquear los botones.
     bindEvents();
+    initOptionalViews();
+
+    if (!window.StageGenerator || !window.CYCLING_CATALOG) {
+      setRoutingBadge('error', 'Núcleo incompleto');
+      toast('Faltan archivos JavaScript del repositorio. Sube la carpeta completa conservando /js y /vendor.', 'error', 12000);
+      return;
+    }
+
     generateTour(readConfig());
+    loadOptionalVendors();
+    window.GT_STAGE_LAB = { state, generateTour, version: window.APP_CONFIG?.version || 'unknown' };
   }
 
-  document.addEventListener('DOMContentLoaded', boot);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+  else boot();
 })();
