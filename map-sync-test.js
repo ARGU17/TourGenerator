@@ -43,6 +43,8 @@ global.window = global;
 global.performance = { now: () => Date.now() };
 global.requestAnimationFrame = (cb) => { cb(Date.now()); return 1; };
 global.cancelAnimationFrame = () => {};
+global.setTimeout = (cb) => { cb(); return 1; };
+global.clearTimeout = () => {};
 global.addEventListener = () => {};
 global.devicePixelRatio = 1;
 global.APP_CONFIG = {
@@ -76,7 +78,8 @@ class FakeMap {
   addControl() {}
   on(name, cb) { (this.handlers[name] ||= []).push(cb); }
   trigger(name, event = {}) { for (const cb of this.handlers[name] || []) cb(event); }
-  isStyleLoaded() { return true; }
+  isStyleLoaded() { return false; } // Simula teselas/DEM aún cargando.
+  getStyle() { return { version: 8 }; }
   addSource(id) { this.sources.set(id, new Source()); }
   getSource(id) { return this.sources.get(id); }
   removeSource(id) { this.sources.delete(id); }
@@ -137,7 +140,7 @@ function stage(number, lon0, lat0, lon1, lat1, status) {
 const a = stage(1, -5.9, 43.3, -5.0, 43.2, 'real');
 const b = stage(2, 6.1, 45.0, 7.0, 45.7, 'real');
 Map3DView.render(a);
-const source = __fakeMap.getSource('stage-route-v13');
+const source = __fakeMap.getSource('stage-route-v14');
 assert.ok(source?.data?.features?.length >= 2, 'La primera etapa no llegó al GeoJSON del mapa');
 const firstA = source.data.features[0].geometry.coordinates[0];
 assert.deepEqual(firstA, [-5.9, 43.3]);
@@ -149,4 +152,4 @@ assert.ok(__fakeMap.stopped, 'La animación de cámara anterior no se detuvo ant
 assert.deepEqual(__fakeMap.lastBounds[0], [6.1, 45.0], 'La cámara no se recalculó con la etapa nueva');
 assert.match(mapElement.children.find((child) => child.className === 'map-sync-badge')?.textContent || '', /ETAPA 2 · OSM REAL/);
 
-console.log('✓ El visor sustituye GeoJSON, marcadores y cámara al cambiar de etapa.');
+console.log('✓ El visor actualiza GeoJSON aunque isStyleLoaded() permanezca false por teselas/DEM pendientes.');

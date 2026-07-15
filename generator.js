@@ -853,90 +853,184 @@
     try {
       return await fetch(url, { ...options, signal: controller?.signal });
     } catch (error) {
-      if (error?.name === 'AbortError') throw new Error(`Tiempo de espera agotado tras ${Math.round(timeoutMs / 1000)} s.`);
-      throw error;
+      if (error?.name === 'AbortError') {
+        const timeoutError = new Error(`Tiempo de espera agotado tras ${Math.round(timeoutMs / 1000)} s.`);
+        timeoutError.code = 'SERVER_UNAVAILABLE';
+        throw timeoutError;
+      }
+      const networkError = new Error(error?.message || 'Error de red o CORS.');
+      networkError.code = 'SERVER_UNAVAILABLE';
+      throw networkError;
     } finally {
       if (timer) clearTimeout(timer);
     }
   }
 
-  async function fetchValhalla(endpoint, payload) {
-    const headers = { 'Accept': 'application/json' };
-    if (window.APP_CONFIG?.valhallaClientId) headers['X-Client-Id'] = window.APP_CONFIG.valhallaClientId;
-    const timeoutMs = Math.max(5000, Number(window.APP_CONFIG?.routeRequestTimeoutMs) || 15000);
-    let postError = null;
-    try {
-      const response = await fetchWithTimeout(endpoint, {
-        method: 'POST',
-        headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      }, timeoutMs);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.json();
-    } catch (error) {
-      postError = error;
-      // A timeout indicates that the host itself is not responding; retrying the same
-      // request as GET would merely double the waiting time. GET remains useful for
-      // immediate POST/CORS/method failures.
-      if (/Tiempo de espera agotado/i.test(error?.message || '')) throw error;
-    }
-
-    try {
-      const url = `${endpoint}${endpoint.includes('?') ? '&' : '?'}json=${encodeURIComponent(JSON.stringify(payload))}`;
-      const response = await fetchWithTimeout(url, { headers }, timeoutMs);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.json();
-    } catch (getError) {
-      const cause = getError?.message || postError?.message || 'Error de red o CORS';
-      throw new Error(`Valhalla no respondió (${cause}). Comprueba Internet, CORS o disponibilidad del servidor público.`);
-    }
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async function routeStage(stage, endpoint) {
+  async function responseError(response) {
+    let detail = '';
+    try {
+      const body = await response.clone().json();
+      detail = body?.error || body?.error_code || body?.message || '';
+    } catch (_) {
+      try { detail = (await response.clone().text()).slice(0, 220); } catch (_) { /* noop */ }
+    }
+    const error = new Error(`HTTP ${response.status}${detail ? ` · ${detail}` : ''}`);
+    if (response.status === 429) error.code = 'RATE_LIMIT';
+    else if (response.status >= 500) error.code = 'SERVER_UNAVAILABLE';
+    else error.code = 'ROUTE_REJECTED';
+    return error;
+  }
+
+  async function fetchValhalla(endpoint, payload, options = {}) {
+    const headers = { 'Accept': 'application/json' };
+    if (window.APP_CONFIG?.valhallaClientId) headers['X-Client-Id'] = window.APP_CONFIG.valhallaClientId;
+    const timeoutMs = Math.max(8000, Number(window.APP_CONFIG?.routeRequestTimeoutMs) || 22000);
+    const requestRetries = Math.max(1, Number(options.requestRetries) || 2);
+    let lastError = null;
+
+    for (let requestAttempt = 1; requestAttempt <= requestRetries; requestAttempt++) {
+      options.onRequest?.({ requestAttempt, requestRetries, transport: 'POST' });
+      try {
+        const response = await fetchWithTimeout(endpoint, {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }, timeoutMs);
+        if (!response.ok) throw await responseError(response);
+        return await response.json();
+      } catch (postError) {
+        lastError = postError;
+        // GET solventa servidores que bloquean POST/CORS. No se duplica una
+        // petición que ya agotó el tiempo de espera.
+        const useGetFallback = (
+          (postError.code === 'SERVER_UNAVAILABLE' && !/Tiempo de espera/i.test(postError.message || '')) ||
+          /HTTP\s+(405|415|501)/i.test(postError.message || '')
+        );
+        if (useGetFallback) {
+          options.onRequest?.({ requestAttempt, requestRetries, transport: 'GET' });
+          try {
+            const url = `${endpoint}${endpoint.includes('?') ? '&' : '?'}json=${encodeURIComponent(JSON.stringify(payload))}`;
+            const response = await fetchWithTimeout(url, { headers }, timeoutMs);
+            if (!response.ok) throw await responseError(response);
+            return await response.json();
+          } catch (getError) {
+            lastError = getError;
+          }
+        }
+      }
+
+      const transient = ['RATE_LIMIT', 'SERVER_UNAVAILABLE'].includes(lastError?.code);
+      if (!transient || requestAttempt >= requestRetries) break;
+      const backoff = (lastError.code === 'RATE_LIMIT' ? 2600 : 900) * requestAttempt;
+      options.onRequest?.({ requestAttempt, requestRetries, transport: 'WAIT', waitMs: backoff, error: lastError });
+      await wait(backoff);
+    }
+
+    const error = new Error(`Valhalla no respondió correctamente (${lastError?.message || 'error desconocido'}).`);
+    error.code = lastError?.code || 'SERVER_UNAVAILABLE';
+    error.cause = lastError;
+    throw error;
+  }
+
+  function compactWaypoints(waypoints, maximum) {
+    if (!Array.isArray(waypoints) || waypoints.length <= maximum) return (waypoints || []).slice();
+    if (maximum <= 2) return [waypoints[0], waypoints[waypoints.length - 1]];
+    const result = [waypoints[0]];
+    for (let i = 1; i < maximum - 1; i++) {
+      const index = Math.round((i / (maximum - 1)) * (waypoints.length - 1));
+      const point = waypoints[index];
+      if (point && result[result.length - 1] !== point) result.push(point);
+    }
+    if (result[result.length - 1] !== waypoints[waypoints.length - 1]) result.push(waypoints[waypoints.length - 1]);
+    return result;
+  }
+
+  function routingVariants(stage, recoveryMode) {
+    const all = Array.isArray(stage.waypoints) ? stage.waypoints : [];
+    const variants = [
+      { label: 'precisa', points: all, allBreaks: false, radius: 3500, reachability: 20, relaxed: false },
+      { label: 'anclajes amplios', points: all, allBreaks: true, radius: 7000, reachability: 8, relaxed: true },
+      { label: 'waypoints simplificados', points: compactWaypoints(all, 7), allBreaks: true, radius: 10000, reachability: 5, relaxed: true },
+      { label: 'corredor simplificado', points: compactWaypoints(all, 5), allBreaks: true, radius: 14000, reachability: 3, relaxed: true },
+      { label: 'salida y meta', points: compactWaypoints(all, 2), allBreaks: true, radius: 20000, reachability: 1, relaxed: true }
+    ];
+    if (recoveryMode) {
+      variants.unshift({ label: 'recuperación ampliada', points: compactWaypoints(all, 6), allBreaks: true, radius: 18000, reachability: 1, relaxed: true });
+    }
+    const seen = new Set();
+    return variants.filter((variant) => {
+      const coordinatesKey = variant.points.map((point) => `${Number(point.lat).toFixed(5)},${Number(point.lon).toFixed(5)}`).join('|');
+      const key = `${variant.allBreaks ? 'B' : 'T'}-${variant.radius}-${variant.reachability}-${coordinatesKey}`;
+      if (variant.points.length < 2 || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function buildValhallaPayload(stage, variant) {
     const typeConfig = CATALOG.stageTypes[stage.type];
-    const payload = {
-      locations: stage.waypoints.map((point, index) => ({
-        lat: point.lat,
-        lon: point.lon,
-        type: index === 0 || index === stage.waypoints.length - 1 ? 'break' : 'through',
-        radius: 2500,
-        minimum_reachability: 30
+    return {
+      locations: variant.points.map((point, index) => ({
+        lat: Number(point.lat),
+        lon: Number(point.lon),
+        type: variant.allBreaks || index === 0 || index === variant.points.length - 1 ? 'break' : 'through',
+        radius: variant.radius,
+        search_cutoff: Math.max(variant.radius, 5000),
+        minimum_reachability: variant.reachability
       })),
       costing: 'bicycle',
       costing_options: {
         bicycle: {
           bicycle_type: 'road',
           cycling_speed: 35,
-          use_roads: 0.88,
+          use_roads: variant.relaxed ? 0.96 : 0.88,
           use_hills: typeConfig.useHills,
-          avoid_bad_surfaces: 1,
+          avoid_bad_surfaces: variant.relaxed ? 0.75 : 1,
           use_ferry: 0,
-          use_living_streets: 0.15
+          use_living_streets: variant.relaxed ? 0.3 : 0.15,
+          shortest: false
         }
       },
       units: 'kilometers',
       directions_type: 'none',
+      shape_format: 'polyline6',
       elevation_interval: window.APP_CONFIG?.elevationIntervalM || 30,
-      id: stage.id
+      id: `${stage.id}-${variant.label}`
     };
+  }
 
-    const response = await fetchValhalla(endpoint, payload);
+  function routedStageFromResponse(stage, response, variant) {
     if (!response.trip || !Array.isArray(response.trip.legs)) {
-      throw new Error(response.error || response.error_code || 'La respuesta no contiene una ruta válida.');
+      const error = new Error(response.error || response.error_code || 'La respuesta no contiene una ruta válida.');
+      error.code = 'ROUTE_REJECTED';
+      throw error;
     }
-    if (response.trip.summary?.has_ferry) throw new Error('La ruta propuesta contiene ferry y se ha rechazado.');
+    if (response.trip.summary?.has_ferry) {
+      const error = new Error('La ruta propuesta contiene ferry y se ha rechazado.');
+      error.code = 'ROUTE_REJECTED';
+      throw error;
+    }
 
     let rawPoints = [];
     const interval = window.APP_CONFIG?.elevationIntervalM || 30;
     response.trip.legs.forEach((leg, legIndex) => {
+      if (!leg?.shape) return;
       const coords = decodePolyline6(leg.shape);
       let legPoints = interpolateElevationForCoordinates(coords, leg.elevation, leg.elevation_interval || interval);
       if (legIndex > 0) legPoints = legPoints.slice(1);
       rawPoints.push(...legPoints);
     });
 
-    rawPoints = downsample(rawPoints, 2000);
-    if (!rawPoints.length) throw new Error('Valhalla devolvió una geometría vacía.');
+    rawPoints = downsample(rawPoints, 2400);
+    if (rawPoints.length < 2) {
+      const error = new Error('Valhalla devolvió una geometría vacía.');
+      error.code = 'ROUTE_REJECTED';
+      throw error;
+    }
 
     const noElevation = rawPoints.every((point) => !Number.isFinite(point.ele) || point.ele === 0);
     if (noElevation) {
@@ -949,10 +1043,57 @@
 
     const routed = enrichStage({ ...stage, source: 'valhalla', routeStatus: 'real' }, rawPoints);
     routed.apiSummary = response.trip.summary || null;
+    routed.routingMode = variant.label;
+    routed.routeAdapted = variant.points.length !== stage.waypoints.length || variant.allBreaks;
+    routed.routedWaypointCount = variant.points.length;
     routed.distanceDifferencePct = stage.targetDistanceKm
       ? ((routed.distanceKm - stage.targetDistanceKm) / stage.targetDistanceKm) * 100
       : 0;
     return routed;
+  }
+
+  async function routeStage(stage, endpoint, options = {}) {
+    const variants = routingVariants(stage, Boolean(options.recovery));
+    const errors = [];
+
+    for (let index = 0; index < variants.length; index++) {
+      const variant = variants[index];
+      options.onAttempt?.({
+        attempt: index + 1,
+        totalAttempts: variants.length,
+        label: variant.label,
+        waypointCount: variant.points.length
+      });
+      try {
+        const payload = buildValhallaPayload(stage, variant);
+        const response = await fetchValhalla(endpoint, payload, {
+          requestRetries: options.recovery ? 2 : 1,
+          onRequest: options.onRequest
+        });
+        return routedStageFromResponse(stage, response, variant);
+      } catch (error) {
+        errors.push(`${variant.label}: ${error.message}`);
+        options.onAttemptError?.({
+          attempt: index + 1,
+          totalAttempts: variants.length,
+          label: variant.label,
+          error
+        });
+        // Un rechazo geométrico se resuelve probando menos waypoints. Un fallo
+        // transitorio de servidor se vuelve a intentar en la pasada de recuperación.
+        if (['RATE_LIMIT', 'SERVER_UNAVAILABLE'].includes(error.code) && !options.recovery) {
+          const wrapped = new Error(error.message);
+          wrapped.code = error.code;
+          wrapped.attemptErrors = errors;
+          throw wrapped;
+        }
+      }
+    }
+
+    const finalError = new Error(`No se encontró una ruta ciclable tras ${variants.length} estrategias. ${errors.slice(-2).join(' | ')}`);
+    finalError.code = 'ROUTE_REJECTED';
+    finalError.attemptErrors = errors;
+    throw finalError;
   }
 
   function parseNaturalConditions(text, currentConfig) {

@@ -1,80 +1,86 @@
-# Grand Tour Stage Lab v1.3
+# Grand Tour Stage Lab v1.4
 
-Generador de vueltas ciclistas con 21 etapas, perfiles altimétricos, visualización cartográfica 3D y exportación GPX/JSON.
+Generador web de vueltas ciclistas con etapas procedurales, perfiles altimétricos, visualización 3D y exportación GPX/ZIP.
 
-## Estructura plana
+## Instalación en GitHub Pages
 
-Todos los archivos están preparados para colocarse directamente en la raíz de `main`:
+La estructura del repositorio es deliberadamente plana. Sube **todos los archivos directamente a la rama `main`**, sin crear carpetas:
 
 ```text
 .nojekyll
 LICENSE
 README.md
-index.html
-styles.css
-config.js
-vendor-loader.js
-catalog.js
-generator.js
-export.js
-profile.js
-map3d.js
 app.js
+catalog.js
+config.js
+export.js
+generator.js
+index.html
 jszip.min.js
-package.json
-smoke-test.js
-map-sync-test.js
-valhalla-proxy.js
-wrangler.toml.example
+map3d.js
+profile.js
+styles.css
+vendor-loader.js
+...
 ```
 
-No hay referencias a carpetas `js/`, `vendor/`, `tests/` ni `source/`.
+Después activa GitHub Pages desde `Settings → Pages` y publica desde la rama principal o mediante el workflow que ya utilices.
 
-## Corrección v1.3 del mapa 3D
+## Funcionamiento sin pago
 
-La versión 1.3 corrige la desincronización por la que el perfil cambiaba de etapa, pero el mapa podía conservar una geometría o cámara anterior.
+La generación procedural, el perfil, el visor 3D local y la exportación GPX/ZIP se ejecutan en el navegador. No requieren:
 
-Cambios principales:
+- Cuenta externa.
+- Tarjeta o suscripción.
+- Clave API.
+- Backend.
+- Variables de entorno.
 
-- Cada selección genera un nuevo identificador interno de renderizado.
-- Se detiene cualquier transición de cámara anterior antes de actualizar.
-- Se filtran coordenadas inválidas antes de enviar GeoJSON a MapLibre.
-- La fuente GeoJSON se sustituye con los segmentos de la etapa seleccionada.
-- La cámara se recalcula con los límites de la nueva geometría.
-- Si la fuente queda en un estado inconsistente, se eliminan y reconstruyen las capas de ruta.
-- El proceso de enrutado de 21 etapas ya no repinta innecesariamente el mapa tras cada etapa no seleccionada.
-- El terreno utiliza el DEM de demostración de MapLibre y una codificación definida.
-- Se añade una etiqueta dentro del mapa: `ETAPA N · OSM REAL/LOCAL · km`, para comprobar qué etapa está representada.
+El modo **carreteras reales** sí necesita Internet porque consulta un servidor público Valhalla basado en OpenStreetMap. Tampoco exige clave ni pago en la configuración incluida, pero el servicio comunitario puede aplicar límites o sufrir indisponibilidad temporal.
 
-## Publicar en GitHub Pages
+## Cambios v1.4
 
-1. Elimina o sustituye los archivos antiguos de la raíz del repositorio.
-2. Sube todos los archivos de este ZIP directamente a `main`.
-3. En GitHub abre `Settings → Pages`.
-4. Selecciona `Deploy from a branch`.
-5. Selecciona `main` y la carpeta `/ (root)`.
-6. Guarda y espera al despliegue.
-7. Recarga la página con `Ctrl + F5` para evitar que el navegador reutilice `map3d.js` o `app.js` anteriores.
+### Sincronización estable del mapa 3D
 
-## Dependencias y costes
+- Eliminada la dependencia incorrecta de `map.isStyleLoaded()` para añadir la ruta.
+- Las teselas raster y el DEM pueden seguir descargándose sin bloquear el GeoJSON de la etapa.
+- La etapa seleccionada queda en una cola única de renderizado y se dibuja en cuanto el estilo admite fuentes y capas.
+- Ya no se eliminan y recrean continuamente las capas ante un fallo transitorio.
+- Los mensajes repetitivos de “capas no preparadas” han sido sustituidos por una espera silenciosa y controlada.
+- Si MapLibre no consigue preparar las capas después de 15 segundos, se activa automáticamente el visor 3D local para no dejar la ruta en blanco.
 
-### Generación local y GPX
+### Recuperación de etapas que no enrutan
 
-No requiere cuenta, clave API, pago ni servidor. Se ejecuta dentro del navegador.
+El botón general ahora trabaja únicamente con las etapas que siguen en modo local. Por ejemplo, si aparecen `18/21` reales, solo consulta las tres pendientes.
 
-### Perfil y visor 3D local
+Cada etapa dispone de varias estrategias:
 
-Funcionan sin API. Si MapLibre o las teselas externas no están disponibles, se mantiene el visor local de respaldo.
+1. Waypoints originales como puntos de paso.
+2. Waypoints originales con anclajes amplios.
+3. Reducción adaptativa de puntos intermedios.
+4. Corredor simplificado.
+5. Ruta entre salida y meta como último recurso.
 
-### Mapa cartográfico y relieve
+Después de la primera pasada se ejecuta una segunda pasada de recuperación con:
 
-Requieren conexión para descargar las teselas de OpenStreetMap y del modelo digital de elevación. No requieren una clave de pago.
+- Radios de búsqueda superiores.
+- Menor exigencia de conectividad local.
+- Reintentos de red.
+- Esperas mayores para reducir bloqueos por frecuencia.
 
-### Enrutado por carreteras reales
+Las etapas ya enrutadas no se vuelven a solicitar ni se sobrescriben.
 
-Requiere conexión al endpoint Valhalla configurado. El proyecto incluye un endpoint público sin clave, pero su disponibilidad y límites no están garantizados. El GPX procedural local continúa funcionando aunque el endpoint falle.
+### Progreso y diagnóstico
 
-## Validación
+La barra muestra:
+
+- Etapa pendiente actual.
+- Estrategia de enrutado.
+- Número de waypoints.
+- Reintentos y esperas del servidor.
+- Resultado de la pasada de recuperación.
+
+## Pruebas
 
 Con Node.js instalado:
 
@@ -82,15 +88,19 @@ Con Node.js instalado:
 npm test
 ```
 
-Las pruebas verifican:
+Se validan:
 
-- Generación para Francia, España, Italia y Europa.
-- Coordenadas válidas.
-- Distancias, desniveles y GPX.
-- Progreso etapa por etapa.
-- Referencias planas desde `index.html`.
-- Sustitución de GeoJSON y cámara cuando se cambia de etapa.
+- Generación de etapas y GPX.
+- Estructura plana del repositorio.
+- Actualización del mapa aunque `isStyleLoaded()` sea `false` por teselas pendientes.
+- Sustitución del GeoJSON y recálculo de cámara.
+- Recuperación adaptativa de una ruta inicialmente rechazada.
 
-## Archivos opcionales
+## Uso recomendado
 
-`valhalla-proxy.js` y `wrangler.toml.example` solo son necesarios para desplegar un proxy propio. No son necesarios para ejecutar la aplicación normal en GitHub Pages.
+1. Genera la vuelta localmente.
+2. Comprueba perfiles y distancias.
+3. Pulsa `Completar N locales` para enrutar únicamente las etapas pendientes.
+4. Exporta el ZIP cuando el resultado sea satisfactorio.
+
+La exportación sigue disponible aunque alguna etapa permanezca local.

@@ -164,10 +164,13 @@
 
   function updateProcess(percent, detail, counter, logLine) {
     if (!state.process.running) return;
-    const normalized = Math.max(0, Math.min(100, Number(percent) || 0));
-    el.processPercent.textContent = `${Math.round(normalized)} %`;
-    el.processBar.style.width = `${normalized}%`;
-    el.processBar.parentElement.setAttribute('aria-valuenow', String(Math.round(normalized)));
+    const numericPercent = Number(percent);
+    if (Number.isFinite(numericPercent)) {
+      const normalized = Math.max(0, Math.min(100, numericPercent));
+      el.processPercent.textContent = `${Math.round(normalized)} %`;
+      el.processBar.style.width = `${normalized}%`;
+      el.processBar.parentElement.setAttribute('aria-valuenow', String(Math.round(normalized)));
+    }
     if (detail) el.processDetail.textContent = detail;
     if (counter) el.processCounter.textContent = counter;
     if (logLine) appendProcessLog(logLine);
@@ -227,7 +230,11 @@
     const stats = window.StageGenerator.tourStats(tour);
     el.tourTitle.textContent = tour.title;
     el.stageCounter.textContent = tour.stages.length;
-    if (!state.routeAllRunning) el.routeTourBtn.textContent = `Enrutar ${tour.stages.length} etapas`;
+    if (!state.routeAllRunning) {
+      const pendingRoutes = Math.max(0, tour.stages.length - stats.realStages);
+      el.routeTourBtn.textContent = pendingRoutes ? `Completar ${pendingRoutes} locales` : 'Todas en OSM';
+      el.routeTourBtn.disabled = pendingRoutes === 0;
+    }
     el.tourSummary.innerHTML = [
       summaryItem(`${formatNumber(stats.distanceKm, 0)} km`, 'Distancia real'),
       summaryItem(`${formatNumber(stats.ascentM, 0)} m+`, 'Desnivel acumulado'),
@@ -349,7 +356,12 @@
       toast(cancelled ? 'Generación cancelada.' : `No se pudo generar la vuelta: ${error.message}`, cancelled ? 'info' : 'error', 7000);
     } finally {
       setMainGenerationButtons(false);
-      el.routeTourBtn.disabled = !state.tour;
+      if (state.tour) {
+        const stats = window.StageGenerator.tourStats(state.tour);
+        el.routeTourBtn.disabled = stats.realStages >= state.tour.stages.length;
+      } else {
+        el.routeTourBtn.disabled = true;
+      }
       el.exportTourBtn.disabled = !state.tour;
     }
   }
@@ -390,29 +402,38 @@
 
     setStageButtonsDisabled(true);
     setRoutingBadge('busy', `Enrutando etapa ${stage.number}`);
-    beginProcess(`Carreteras reales · etapa ${stage.number}`, 'Conectando con el servidor público Valhalla/OpenStreetMap…', {
+    beginProcess(`Carreteras reales · etapa ${stage.number}`, 'Buscando una ruta ciclable sobre OpenStreetMap…', {
       icon: '↗',
-      counter: '1 solicitud externa'
+      counter: 'Estrategia 1'
     });
-    updateProcess(12, 'Preparando puntos de paso y perfil de bicicleta de carretera…', 'Fase 1/3');
-    await delay(30);
-    updateProcess(24, 'Solicitud enviada. La barra permanecerá visible mientras responde el servidor.', 'Fase 2/3', `Endpoint: ${endpoint}`);
 
     try {
-      const routed = await window.StageGenerator.routeStage(stage, endpoint);
-      updateProcess(86, 'Ruta recibida. Calculando elevación, pendientes y puertos…', 'Fase 3/3');
+      const routed = await window.StageGenerator.routeStage(stage, endpoint, {
+        recovery: true,
+        onAttempt: ({ attempt, totalAttempts, label, waypointCount }) => {
+          const percent = 8 + ((attempt - 1) / Math.max(1, totalAttempts)) * 74;
+          updateProcess(percent, `Estrategia ${attempt}/${totalAttempts}: ${label} con ${waypointCount} puntos de paso…`, `Estrategia ${attempt}/${totalAttempts}`, `Intento: ${label}`);
+        },
+        onRequest: ({ requestAttempt, requestRetries, transport, waitMs }) => {
+          if (transport === 'WAIT') {
+            updateProcess(undefined, `Servidor ocupado; reintento automático en ${(waitMs / 1000).toFixed(1)} s…`, `Red ${requestAttempt}/${requestRetries}`);
+          }
+        },
+        onAttemptError: ({ label, error }) => appendProcessLog(`↻ ${label}: ${error.message}`)
+      });
+      updateProcess(88, 'Ruta recibida. Calculando elevación, pendientes y puertos…', 'Procesando geometría');
       state.tour.stages[state.selectedIndex] = routed;
-      await delay(20);
+      await delay(30);
       renderTour();
-      await delay(70);
+      await delay(100);
       window.Map3DView?.render?.(routed);
-      setRoutingBadge('live', 'Ruta OpenStreetMap');
+      setRoutingBadge('live', routed.routeAdapted ? 'OSM real adaptada' : 'Ruta OpenStreetMap');
       const delta = Math.abs(routed.distanceDifferencePct || 0);
-      finishProcess(true, 'Etapa enrutada por carreteras reales', `${routed.routeLabel}: ${formatNumber(routed.distanceKm, 1)} km y ${formatNumber(routed.ascentM, 0)} m+.`, { counter: '1/1 etapas' });
+      finishProcess(true, 'Etapa enrutada por carreteras reales', `${routed.routeLabel}: ${formatNumber(routed.distanceKm, 1)} km y ${formatNumber(routed.ascentM, 0)} m+ · estrategia ${routed.routingMode}.`, { counter: '1/1 etapas' });
       toast(`Etapa ${routed.number} enrutada.${delta > 18 ? ' La distancia difiere del objetivo por la red viaria.' : ''}`, 'success', 5600);
     } catch (error) {
       console.error(error);
-      setRoutingBadge('error', 'Servidor real no disponible');
+      setRoutingBadge(error.code === 'RATE_LIMIT' ? 'demo' : 'error', error.code === 'RATE_LIMIT' ? 'Servidor ocupado' : 'Ruta real no disponible');
       finishProcess(false, 'No se pudo obtener la carretera real', `${error.message}. La etapa local sigue intacta y puede exportarse en GPX.`, { autoHide: false });
       toast(`No se pudo enrutar la etapa: ${error.message}. Se conserva la versión local.`, 'error', 8000);
     } finally {
@@ -428,75 +449,125 @@
       return;
     }
 
+    const pendingIndices = state.tour.stages
+      .map((stage, index) => stage.routeStatus === 'real' ? null : index)
+      .filter((index) => index !== null);
+    if (!pendingIndices.length) {
+      toast('Las etapas ya están enrutadas por OpenStreetMap.', 'success');
+      return;
+    }
+
     state.routeAllRunning = true;
     el.routeTourBtn.disabled = true;
     setMainGenerationButtons(true);
     el.exportTourBtn.disabled = true;
     let successes = 0;
     let failures = 0;
-    let consecutiveNetworkFailures = 0;
-    const total = state.tour.stages.length;
+    let consecutiveServerFailures = 0;
+    const initialReal = state.tour.stages.length - pendingIndices.length;
 
-    beginProcess(`Enrutando ${total} etapas reales`, 'Cada etapa requiere una petición externa. No se cobra ni se necesita clave, pero el servidor público puede limitar el uso.', {
+    beginProcess(`Completando ${pendingIndices.length} etapas locales`, `${initialReal} etapas ya están en verde y se conservarán. Solo se consultarán las etapas pendientes.`, {
       cancellable: true,
       icon: '↗',
-      counter: `0/${total} etapas`
+      counter: `0/${pendingIndices.length} pendientes`
     });
 
-    for (let index = 0; index < total; index++) {
-      if (state.process.cancelRequested) break;
-      const stage = state.tour.stages[index];
-      const base = (index / Math.max(1, total)) * 100;
-      updateProcess(base, `Etapa ${index + 1}/${total}: consultando carreteras para ${stage.routeLabel}…`, `${index}/${total} etapas`, `Inicio etapa ${index + 1}: ${stage.routeLabel}`);
-      setRoutingBadge('busy', `Enrutando ${index + 1}/${total}`);
-      el.routeTourBtn.textContent = `${index + 1}/${total}`;
+    const routeIndex = async (stageIndex, position, total, recovery) => {
+      const stage = state.tour.stages[stageIndex];
+      const phaseStart = recovery ? 72 : 0;
+      const phaseSpan = recovery ? 28 : 72;
+      const phaseProgress = phaseStart + (position / Math.max(1, total)) * phaseSpan;
+      setRoutingBadge('busy', recovery ? `Recuperando ${position + 1}/${total}` : `Enrutando ${position + 1}/${total}`);
+      el.routeTourBtn.textContent = recovery ? `Rec. ${position + 1}/${total}` : `${position + 1}/${total}`;
+
       try {
-        state.tour.stages[index] = await window.StageGenerator.routeStage(stage, endpoint);
+        const routed = await window.StageGenerator.routeStage(stage, endpoint, {
+          recovery,
+          onAttempt: ({ attempt, totalAttempts, label, waypointCount }) => {
+            const inner = (attempt - 1) / Math.max(1, totalAttempts);
+            const percent = Math.min(99, phaseProgress + inner * (phaseSpan / Math.max(1, total)));
+            updateProcess(percent, `${recovery ? 'Recuperación' : 'Etapa'} ${position + 1}/${total}: ${stage.routeLabel} · ${label} (${waypointCount} puntos)…`, `${successes}/${pendingIndices.length} completadas`, `${stage.number}: ${label}`);
+          },
+          onRequest: ({ transport, waitMs }) => {
+            if (transport === 'WAIT') appendProcessLog(`Servidor ocupado; espera automática de ${(waitMs / 1000).toFixed(1)} s.`);
+          },
+          onAttemptError: ({ label, error }) => appendProcessLog(`↻ E${stage.number} · ${label}: ${error.message}`)
+        });
+        state.tour.stages[stageIndex] = routed;
         successes++;
-        consecutiveNetworkFailures = 0;
-        updateProcess(((index + 1) / total) * 100, `Etapa ${index + 1} completada por OpenStreetMap.`, `${index + 1}/${total} etapas`, `✓ ${state.tour.stages[index].routeLabel}`);
-        if (index === state.selectedIndex) renderSelectedStage();
+        consecutiveServerFailures = 0;
+        updateProcess(undefined, `Etapa ${stage.number} completada por OpenStreetMap.`, `${successes}/${pendingIndices.length} completadas`, `✓ E${stage.number} · ${routed.routingMode}`);
+        if (stageIndex === state.selectedIndex) renderSelectedStage();
         renderStageListOnly();
+        return true;
       } catch (error) {
         failures++;
-        consecutiveNetworkFailures++;
-        console.warn(`Etapa ${index + 1}:`, error);
-        updateProcess(((index + 1) / total) * 100, `Etapa ${index + 1} no disponible; se conserva el GPX local.`, `${index + 1}/${total} etapas`, `✕ ${stage.routeLabel}: ${error.message}`);
-        if (consecutiveNetworkFailures >= 3) {
-          appendProcessLog('Tres fallos consecutivos: se detiene para no repetir solicitudes inútiles.');
+        if (['SERVER_UNAVAILABLE', 'RATE_LIMIT'].includes(error.code)) consecutiveServerFailures++;
+        else consecutiveServerFailures = 0;
+        console.warn(`Etapa ${stage.number}:`, error);
+        updateProcess(undefined, `Etapa ${stage.number} pendiente: ${error.message}`, `${successes}/${pendingIndices.length} completadas`, `✕ E${stage.number}: ${error.message}`);
+        return { error };
+      }
+    };
+
+    for (let position = 0; position < pendingIndices.length; position++) {
+      if (state.process.cancelRequested) break;
+      const stageIndex = pendingIndices[position];
+      const result = await routeIndex(stageIndex, position, pendingIndices.length, false);
+      if (consecutiveServerFailures >= 3) {
+        appendProcessLog('Tres fallos de servidor consecutivos: se pausa la primera pasada y se intentará recuperación después.');
+        break;
+      }
+      if (position < pendingIndices.length - 1 && !state.process.cancelRequested) {
+        await delay(Math.max(1400, window.APP_CONFIG?.routeRequestDelayMs || 1700));
+      }
+    }
+
+    // Segunda pasada solo para las etapas que siguen locales. Usa radios mayores,
+    // menos waypoints y reintentos de red, evitando volver a consultar las verdes.
+    const recoveryIndices = pendingIndices
+      .filter((stageIndex) => state.tour.stages[stageIndex]?.routeStatus !== 'real');
+
+    if (!state.process.cancelRequested && recoveryIndices.length) {
+      appendProcessLog(`Iniciando recuperación adaptativa de ${recoveryIndices.length} etapas.`);
+      consecutiveServerFailures = 0;
+      await delay(1800);
+      for (let position = 0; position < recoveryIndices.length; position++) {
+        if (state.process.cancelRequested) break;
+        const stageIndex = recoveryIndices[position];
+        const result = await routeIndex(stageIndex, position, recoveryIndices.length, true);
+        if (result === true) failures = Math.max(0, failures - 1);
+        if (consecutiveServerFailures >= 3) {
+          appendProcessLog('El servidor continúa sin responder; se detiene la recuperación para evitar solicitudes innecesarias.');
           break;
         }
-      }
-      if (index < total - 1 && !state.process.cancelRequested) {
-        const waitMs = Math.max(1100, window.APP_CONFIG?.routeRequestDelayMs || 1200);
-        await delay(waitMs);
+        if (position < recoveryIndices.length - 1 && !state.process.cancelRequested) await delay(2400);
       }
     }
 
     const cancelled = state.process.cancelRequested;
     state.routeAllRunning = false;
-    el.routeTourBtn.disabled = false;
     setMainGenerationButtons(false);
     el.exportTourBtn.disabled = false;
-    el.routeTourBtn.textContent = `Enrutar ${state.tour.stages.length} etapas`;
     renderTour();
-    await delay(80);
+    await delay(100);
     const selectedStage = state.tour?.stages[state.selectedIndex];
     if (selectedStage) window.Map3DView?.render?.(selectedStage);
 
-    const attempted = successes + failures;
+    const stats = window.StageGenerator.tourStats(state.tour);
+    const remaining = state.tour.stages.length - stats.realStages;
     if (cancelled) {
-      setRoutingBadge('demo', `${successes} reales · cancelado`);
-      finishProcess(false, 'Enrutado cancelado', `${successes} etapas reales; las demás permanecen en modo local.`, { counter: `${attempted}/${total} intentadas`, autoHide: false });
+      setRoutingBadge('demo', `${stats.realStages} reales · cancelado`);
+      finishProcess(false, 'Enrutado cancelado', `${stats.realStages} etapas reales; ${remaining} permanecen locales.`, { counter: `${successes}/${pendingIndices.length} completadas`, autoHide: false });
       toast('Enrutado cancelado. No se ha perdido ninguna etapa local.', 'info', 6500);
-    } else if (successes === 0 && failures > 0) {
+    } else if (successes === 0) {
       setRoutingBadge('error', 'Servidor externo sin respuesta');
-      finishProcess(false, 'Servidor externo no disponible', `No se pudo enrutar ninguna etapa. Las ${total} etapas locales siguen listas para GPX.`, { counter: `${attempted}/${total} intentadas`, autoHide: false });
-      toast('El servidor público no está disponible desde tu navegador. La generación y exportación local siguen funcionando.', 'error', 9000);
+      finishProcess(false, 'No se completaron etapas nuevas', `Las ${pendingIndices.length} etapas pendientes siguen en modo local. Prueba de nuevo más tarde; no requieren pago ni clave.`, { counter: `0/${pendingIndices.length}`, autoHide: false });
+      toast('El servidor público no ha podido completar las rutas pendientes. Las etapas locales siguen disponibles.', 'error', 9000);
     } else {
-      setRoutingBadge(failures ? 'demo' : 'live', failures ? `${successes} reales · ${failures} locales` : 'Vuelta OpenStreetMap');
-      finishProcess(true, 'Enrutado finalizado', `${successes} etapas reales y ${total - successes} etapas locales.`, { counter: `${attempted}/${total} intentadas`, autoHideMs: 6500 });
-      toast(`Enrutado finalizado: ${successes} etapas reales y ${total - successes} locales.`, failures ? 'info' : 'success', 7000);
+      setRoutingBadge(remaining ? 'demo' : 'live', remaining ? `${stats.realStages} reales · ${remaining} locales` : 'Vuelta OpenStreetMap');
+      finishProcess(true, 'Enrutado finalizado', `${successes} etapas nuevas completadas. Total: ${stats.realStages} reales y ${remaining} locales.`, { counter: `${successes}/${pendingIndices.length} completadas`, autoHideMs: 7000 });
+      toast(`Enrutado finalizado: ${stats.realStages} etapas reales y ${remaining} locales.`, remaining ? 'info' : 'success', 7000);
     }
   }
 

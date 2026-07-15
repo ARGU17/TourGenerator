@@ -26,10 +26,14 @@
   let renderSerial = 0;
   let syncBadge = null;
   let lastTerrainErrorAt = 0;
+  let pendingRender = null;
+  let syncTimer = null;
+  let messageTimer = null;
+  let routeLayersReady = false;
 
-  const routeSourceId = 'stage-route-v13';
-  const routeOutlineId = 'stage-route-outline-v13';
-  const routeLineId = 'stage-route-line-v13';
+  const routeSourceId = 'stage-route-v14';
+  const routeOutlineId = 'stage-route-outline-v14';
+  const routeLineId = 'stage-route-line-v14';
 
   function createStyle() {
     const config = window.APP_CONFIG || {};
@@ -153,6 +157,9 @@
       syncBadge = null;
       renderer = 'maplibre';
       loaded = false;
+      routeLayersReady = false;
+      pendingRender = null;
+      if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
 
       map = new window.maplibregl.Map({
         container: elementId,
@@ -188,13 +195,20 @@
             'fog-ground-blend': 0.08
           });
         } catch (_) { /* Sky is optional. */ }
-        addRouteLayers();
+        routeLayersReady = addRouteLayers();
         if (currentStage) render(currentStage);
       });
 
       map.on('styledata', () => {
-        if (!loaded || !map?.isStyleLoaded?.()) return;
-        addRouteLayers();
+        if (!loaded || !map) return;
+        routeLayersReady = addRouteLayers() || routeLayersReady;
+        flushPendingRender();
+      });
+
+      map.on('idle', () => {
+        if (!loaded || !map) return;
+        routeLayersReady = addRouteLayers() || routeLayersReady;
+        flushPendingRender();
       });
 
       map.on('error', (event) => {
@@ -222,13 +236,28 @@
   function showMessage(text, duration) {
     const message = document.getElementById(messageElementId);
     if (!message) return;
+    if (messageTimer) { clearTimeout(messageTimer); messageTimer = null; }
     message.textContent = text;
     message.classList.remove('hidden');
-    if (duration) setTimeout(() => message.classList.add('hidden'), duration);
+    if (duration) {
+      messageTimer = setTimeout(() => {
+        message.classList.add('hidden');
+        messageTimer = null;
+      }, duration);
+    }
+  }
+
+  function hideMessage() {
+    const message = document.getElementById(messageElementId);
+    if (message) message.classList.add('hidden');
+    if (messageTimer) { clearTimeout(messageTimer); messageTimer = null; }
   }
 
   function addRouteLayers() {
-    if (!map || !loaded || !map.isStyleLoaded?.()) return false;
+    // MapLibre permite añadir fuentes y capas después del evento `load`, aunque
+    // isStyleLoaded() pueda seguir siendo false mientras descarga teselas/DEM.
+    // La comprobación anterior provocaba un bucle permanente de reintentos.
+    if (!map || !loaded || !map.getStyle?.()) return false;
     try {
       if (!map.getSource(routeSourceId)) {
         map.addSource(routeSourceId, {
@@ -353,15 +382,81 @@
     stopAnimation();
     const serial = ++renderSerial;
     updateSyncBadge(stage, 'ACTUALIZANDO');
-    if (renderer === 'maplibre' && map && loaded) {
-      requestAnimationFrame(() => renderMap(stage, serial));
+    if (renderer === 'maplibre' && map) {
+      pendingRender = { stage, serial, attempts: 0, startedAt: Date.now(), warned: false };
+      schedulePendingRender(0);
     } else {
       updateSyncBadge(stage);
       drawFallback();
     }
   }
 
-  function renderMap(stage, serial = renderSerial) {
+  function schedulePendingRender(delayMs = 80) {
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = window.setTimeout(() => {
+      syncTimer = null;
+      flushPendingRender();
+    }, Math.max(0, delayMs));
+  }
+
+  function flushPendingRender() {
+    const pending = pendingRender;
+    if (!pending || pending.serial !== renderSerial || renderer !== 'maplibre' || !map) return;
+    if (!loaded) {
+      pending.attempts++;
+      updateSyncBadge(pending.stage, 'CARGANDO MAPA');
+      schedulePendingRender(120);
+      return;
+    }
+
+    routeLayersReady = addRouteLayers() || routeLayersReady;
+    const source = routeLayersReady ? map.getSource(routeSourceId) : null;
+    if (!routeLayersReady || !source?.setData) {
+      pending.attempts++;
+      const elapsed = Date.now() - pending.startedAt;
+      updateSyncBadge(pending.stage, elapsed > 2500 ? 'ESPERANDO CAPAS' : 'PREPARANDO CAPAS');
+      // No se muestra un error en cada intento. Se mantiene una única cola de
+      // sincronización y se reintenta cuando MapLibre emite styledata/idle.
+      if (elapsed > 9000 && !pending.warned) {
+        pending.warned = true;
+        showMessage('El mapa base sigue cargando. La ruta se añadirá automáticamente en cuanto MapLibre termine de preparar el estilo.', 5000);
+      }
+      if (elapsed > 15000 && pending.attempts > 35) {
+        console.warn('[Grand Tour Stage Lab] MapLibre no preparó las capas de ruta; se activa el visor 3D local estable.');
+        const stageToKeep = pending.stage;
+        pendingRender = null;
+        try { map.remove(); } catch (_) { /* noop */ }
+        map = null;
+        loaded = false;
+        routeLayersReady = false;
+        initFallback();
+        currentStage = stageToKeep;
+        updateSyncBadge(stageToKeep, '3D LOCAL');
+        drawFallback();
+        showMessage('El mapa cartográfico no terminó de preparar sus capas. Se ha activado automáticamente el visor 3D local con la ruta completa.', 6500);
+        return;
+      }
+      schedulePendingRender(Math.min(500, 100 + pending.attempts * 25));
+      return;
+    }
+
+    try {
+      renderMapNow(pending.stage, pending.serial, source);
+      pendingRender = null;
+      hideMessage();
+    } catch (error) {
+      pending.attempts++;
+      const recoverable = /style|source|layer|load|ready|available|remove/i.test(error?.message || '');
+      console.warn('[Grand Tour Stage Lab] Sincronización de mapa aplazada.', error);
+      updateSyncBadge(pending.stage, recoverable ? 'REINTENTANDO' : 'MAPA DEGRADADO');
+      if (!recoverable || pending.attempts > 18) {
+        showMessage(`El mapa no pudo dibujar la ruta todavía: ${error.message}. Se conserva el perfil y el GPX.`, 6500);
+      }
+      schedulePendingRender(recoverable ? 220 : 650);
+    }
+  }
+
+  function renderMapNow(stage, serial, source) {
     if (!map || !loaded || serial !== renderSerial) return;
     const points = sanitizedPoints(stage);
     if (points.length < 2) {
@@ -370,56 +465,34 @@
       return;
     }
 
-    try {
-      map.stop();
-      if (!addRouteLayers()) throw new Error('Las capas del mapa todavía no están preparadas.');
-      const source = map.getSource(routeSourceId);
-      if (!source?.setData) throw new Error('La fuente GeoJSON de la ruta no está disponible.');
-      source.setData(stageFeatureCollection(stage, points));
-      clearMarkers();
+    map.stop();
+    source.setData(stageFeatureCollection(stage, points));
+    clearMarkers();
 
-      const first = points[0];
-      const last = points[points.length - 1];
-      addMarker(first, 'route-marker start', `<strong>${escapeHtml(stage.startName)}</strong><br>Salida`);
-      addMarker(last, 'route-marker finish', `<strong>${escapeHtml(stage.finishName)}</strong><br>Meta`);
+    const first = points[0];
+    const last = points[points.length - 1];
+    addMarker(first, 'route-marker start', `<strong>${escapeHtml(stage.startName)}</strong><br>Salida`);
+    addMarker(last, 'route-marker finish', `<strong>${escapeHtml(stage.finishName)}</strong><br>Meta`);
 
-      (stage.climbs || []).slice(0, 6).forEach((climb) => {
-        const originalPoint = stage.points?.[climb.endIndex];
-        if (!validPoint(originalPoint)) return;
-        addMarker(originalPoint, 'route-marker climb', `<strong>${escapeHtml(climb.name)}</strong><br>Cat. ${escapeHtml(climb.category)} · ${Number(climb.lengthKm || 0).toFixed(1)} km al ${Number(climb.avgGrade || 0).toFixed(1)} %`);
-      });
+    (stage.climbs || []).slice(0, 6).forEach((climb) => {
+      const originalPoint = stage.points?.[climb.endIndex];
+      if (!validPoint(originalPoint)) return;
+      addMarker(originalPoint, 'route-marker climb', `<strong>${escapeHtml(climb.name)}</strong><br>Cat. ${escapeHtml(climb.category)} · ${Number(climb.lengthKm || 0).toFixed(1)} km al ${Number(climb.avgGrade || 0).toFixed(1)} %`);
+    });
 
-      const bounds = boundsForPoints(points);
-      const padding = { top: 58, bottom: 58, left: 48, right: 48 };
-      const camera = map.cameraForBounds?.(bounds, { padding, maxZoom: 11.5 });
-      const target = camera || { center: bounds.getCenter(), zoom: 8 };
-      map.easeTo({
-        ...target,
-        pitch: perspective === 'top' ? 0 : 66,
-        bearing: perspective === 'top' ? 0 : routeBearingFromPoints(points),
-        duration: 720,
-        essential: true
-      });
-      map.triggerRepaint?.();
-      updateSyncBadge(stage);
-    } catch (error) {
-      console.warn('[Grand Tour Stage Lab] La ruta no pudo actualizarse en MapLibre; se reconstruirá el visor.', error);
-      updateSyncBadge(stage, 'REINTENTANDO');
-      showMessage(`Reintentando la sincronización del mapa: ${error.message}`, 4200);
-      window.setTimeout(() => {
-        if (serial !== renderSerial || renderer !== 'maplibre' || !map) return;
-        try {
-          if (map.getLayer(routeLineId)) map.removeLayer(routeLineId);
-          if (map.getLayer(routeOutlineId)) map.removeLayer(routeOutlineId);
-          if (map.getSource(routeSourceId)) map.removeSource(routeSourceId);
-          addRouteLayers();
-          renderMap(stage, serial);
-        } catch (retryError) {
-          console.error('[Grand Tour Stage Lab] Fallo definitivo al refrescar la ruta.', retryError);
-          updateSyncBadge(stage, 'MAPA DEGRADADO');
-        }
-      }, 180);
-    }
+    const bounds = boundsForPoints(points);
+    const padding = { top: 58, bottom: 58, left: 48, right: 48 };
+    const camera = map.cameraForBounds?.(bounds, { padding, maxZoom: 11.5 });
+    const target = camera || { center: bounds.getCenter(), zoom: 8 };
+    map.easeTo({
+      ...target,
+      pitch: perspective === 'top' ? 0 : 66,
+      bearing: perspective === 'top' ? 0 : routeBearingFromPoints(points),
+      duration: 720,
+      essential: true
+    });
+    map.triggerRepaint?.();
+    updateSyncBadge(stage);
   }
 
   function routeBearingFromPoints(points) {

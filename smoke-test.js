@@ -73,7 +73,7 @@ const base = {
   assert.equal(progressEvents.filter((event) => event.phase === 'stage-complete').length, 5, 'No hay progreso por etapa');
 
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-  assert.match(index, /terreno 3D · v1\.3/);
+  assert.match(index, /terreno 3D · v1\.4/);
   for (const file of ['jszip.min.js', 'config.js', 'vendor-loader.js', 'catalog.js', 'generator.js', 'export.js', 'profile.js', 'map3d.js', 'app.js']) {
     assert.match(index, new RegExp(`src="${file.replace('.', '\\.')}`), `index.html no carga ${file} desde la raíz`);
     assert.ok(fs.existsSync(path.join(root, file)), `Falta ${file} en la raíz`);
@@ -92,7 +92,7 @@ const base = {
     new vm.Script(fs.readFileSync(path.join(root, file), 'utf8'), { filename: file });
   }
 
-  console.log('✓ v1.3: generación, GPX, progreso, estructura plana y sincronización del mapa validadas.');
+  console.log('✓ v1.4: generación, GPX, progreso, estructura plana y sincronización del mapa validadas.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
