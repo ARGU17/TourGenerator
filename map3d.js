@@ -23,13 +23,24 @@
   let hoverPoint = null;
   let riderProgress = null;
   let renderer = 'fallback';
+  let renderSerial = 0;
+  let syncBadge = null;
+  let lastTerrainErrorAt = 0;
 
-  const routeSourceId = 'stage-route';
-  const routeOutlineId = 'stage-route-outline';
-  const routeLineId = 'stage-route-line';
+  const routeSourceId = 'stage-route-v13';
+  const routeOutlineId = 'stage-route-outline-v13';
+  const routeLineId = 'stage-route-line-v13';
 
   function createStyle() {
     const config = window.APP_CONFIG || {};
+    const terrain = {
+      type: 'raster-dem',
+      url: config.terrainTileJson || 'https://demotiles.maplibre.org/terrain-tiles/tiles.json',
+      tileSize: 256,
+      maxzoom: 14
+    };
+    if (config.terrainEncoding) terrain.encoding = config.terrainEncoding;
+
     return {
       version: 8,
       sources: {
@@ -40,30 +51,31 @@
           attribution: '&copy; OpenStreetMap contributors',
           maxzoom: 19
         },
-        terrainSource: {
-          type: 'raster-dem',
-          url: config.terrainTileJson || 'https://tiles.mapterhorn.com/tilejson.json'
-        },
-        hillshadeSource: {
-          type: 'raster-dem',
-          url: config.terrainTileJson || 'https://tiles.mapterhorn.com/tilejson.json'
-        }
+        terrainSource: terrain
       },
       layers: [
-        { id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-saturation': -0.36, 'raster-contrast': 0.13, 'raster-brightness-max': 0.78 } },
+        {
+          id: 'osm',
+          type: 'raster',
+          source: 'osm',
+          paint: {
+            'raster-saturation': -0.34,
+            'raster-contrast': 0.10,
+            'raster-brightness-max': 0.82
+          }
+        },
         {
           id: 'hillshade',
           type: 'hillshade',
-          source: 'hillshadeSource',
+          source: 'terrainSource',
           paint: {
             'hillshade-shadow-color': '#071018',
             'hillshade-highlight-color': '#dcecf1',
             'hillshade-accent-color': '#4c6574',
-            'hillshade-exaggeration': 0.55
+            'hillshade-exaggeration': 0.42
           }
         }
-      ],
-      terrain: { source: 'terrainSource', exaggeration: terrainExaggeration }
+      ]
     };
   }
 
@@ -75,6 +87,28 @@
     if (!container) return;
     initFallback();
     upgrade();
+  }
+
+  function ensureSyncBadge() {
+    if (!container) return null;
+    if (syncBadge && syncBadge.isConnected) return syncBadge;
+    syncBadge = document.createElement('div');
+    syncBadge.className = 'map-sync-badge';
+    syncBadge.textContent = 'Preparando mapa…';
+    container.appendChild(syncBadge);
+    return syncBadge;
+  }
+
+  function updateSyncBadge(stage, suffix) {
+    const badge = ensureSyncBadge();
+    if (!badge) return;
+    if (!stage) {
+      badge.textContent = 'Sin etapa seleccionada';
+      return;
+    }
+    const mode = stage.routeStatus === 'real' ? 'OSM REAL' : 'LOCAL';
+    const km = Number.isFinite(stage.distanceKm) ? `${stage.distanceKm.toFixed(1)} km` : '';
+    badge.textContent = `ETAPA ${stage.number || '–'} · ${mode}${km ? ` · ${km}` : ''}${suffix ? ` · ${suffix}` : ''}`;
   }
 
   function initFallback() {
@@ -92,6 +126,9 @@
     label.className = 'fallback-mode-label map-fallback-label';
     label.textContent = '3D LOCAL';
     container.appendChild(label);
+    syncBadge = null;
+    ensureSyncBadge();
+    updateSyncBadge(currentStage);
 
     resizeObserver?.disconnect?.();
     if (typeof window.ResizeObserver === 'function') {
@@ -108,11 +145,12 @@
     if (map || !container || !window.maplibregl?.Map) return false;
     try {
       stopAnimation();
-      resizeObserver?.disconnect();
+      resizeObserver?.disconnect?.();
       container.classList.remove('fallback-3d-active');
       container.innerHTML = '';
       fallbackCanvas = null;
       fallbackContext = null;
+      syncBadge = null;
       renderer = 'maplibre';
       loaded = false;
 
@@ -129,11 +167,17 @@
         attributionControl: true
       });
 
+      ensureSyncBadge();
       map.addControl(new window.maplibregl.NavigationControl({ visualizePitch: true, showCompass: true, showZoom: true }), 'top-right');
       map.addControl(new window.maplibregl.ScaleControl({ maxWidth: 130, unit: 'metric' }), 'bottom-left');
 
       map.on('load', () => {
         loaded = true;
+        try {
+          map.setTerrain({ source: 'terrainSource', exaggeration: terrainExaggeration });
+        } catch (error) {
+          console.warn('[Grand Tour Stage Lab] El terreno DEM no pudo activarse; el mapa y la ruta siguen funcionando.', error);
+        }
         try {
           map.setSky?.({
             'sky-color': '#071018',
@@ -145,13 +189,22 @@
           });
         } catch (_) { /* Sky is optional. */ }
         addRouteLayers();
-        if (currentStage) renderMap(currentStage);
+        if (currentStage) render(currentStage);
+      });
+
+      map.on('styledata', () => {
+        if (!loaded || !map?.isStyleLoaded?.()) return;
+        addRouteLayers();
       });
 
       map.on('error', (event) => {
         const errorText = event?.error?.message || '';
-        if (/terrain|tile|source|network|fetch/i.test(errorText)) {
-          showMessage('No se ha podido cargar alguna capa cartográfica o de terreno. La geometría y el perfil siguen disponibles.', 6500);
+        if (/terrain|dem|tile|source|network|fetch/i.test(errorText)) {
+          const now = Date.now();
+          if (now - lastTerrainErrorAt > 6000) {
+            lastTerrainErrorAt = now;
+            showMessage('Alguna tesela de mapa o relieve no ha respondido. La ruta seleccionada continúa sincronizada.', 5200);
+          }
         }
       });
       return true;
@@ -175,39 +228,92 @@
   }
 
   function addRouteLayers() {
-    if (!map || !loaded || map.getSource(routeSourceId)) return;
-    map.addSource(routeSourceId, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({
-      id: routeOutlineId,
-      type: 'line',
-      source: routeSourceId,
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': 'rgba(3, 8, 12, .92)', 'line-width': 9, 'line-opacity': 0.8 }
-    });
-    map.addLayer({
-      id: routeLineId,
-      type: 'line',
-      source: routeSourceId,
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: {
-        'line-color': ['interpolate', ['linear'], ['get', 'difficulty'], 0, '#72f0a8', 0.35, '#f5cf5b', 0.65, '#ff9f43', 1, '#ff5c5c'],
-        'line-width': 5,
-        'line-opacity': 0.98
+    if (!map || !loaded || !map.isStyleLoaded?.()) return false;
+    try {
+      if (!map.getSource(routeSourceId)) {
+        map.addSource(routeSourceId, {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+          lineMetrics: true
+        });
       }
-    });
+      if (!map.getLayer(routeOutlineId)) {
+        map.addLayer({
+          id: routeOutlineId,
+          type: 'line',
+          source: routeSourceId,
+          filter: ['==', ['get', 'kind'], 'segment'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': 'rgba(3, 8, 12, .94)', 'line-width': 9, 'line-opacity': 0.86 }
+        });
+      }
+      if (!map.getLayer(routeLineId)) {
+        map.addLayer({
+          id: routeLineId,
+          type: 'line',
+          source: routeSourceId,
+          filter: ['==', ['get', 'kind'], 'segment'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: {
+            'line-color': ['case',
+              ['<=', ['get', 'grade'], -4], '#3c9dff',
+              ['<=', ['get', 'grade'], 2], '#72f0a8',
+              ['<=', ['get', 'grade'], 5], '#f1d35e',
+              ['<=', ['get', 'grade'], 8], '#ff9f43',
+              '#ff5c5c'
+            ],
+            'line-width': 5,
+            'line-opacity': 0.99
+          }
+        });
+      }
+      return true;
+    } catch (error) {
+      console.warn('[Grand Tour Stage Lab] No se pudieron preparar las capas de ruta.', error);
+      return false;
+    }
   }
 
-  function difficultyForStage(stage) {
-    const mapping = { flat: 0.05, itt: 0.12, rolling: 0.35, punchy: 0.52, medium_mountain: 0.72, high_mountain: 1 };
-    return mapping[stage.type] ?? 0.35;
+  function validPoint(point) {
+    return point && Number.isFinite(Number(point.lon)) && Number.isFinite(Number(point.lat)) &&
+      Number(point.lon) >= -180 && Number(point.lon) <= 180 && Number(point.lat) >= -85 && Number(point.lat) <= 85;
   }
 
-  function stageFeature(stage) {
-    return {
-      type: 'Feature',
-      properties: { difficulty: difficultyForStage(stage), source: stage.source },
-      geometry: { type: 'LineString', coordinates: stage.points.map((point) => [point.lon, point.lat]) }
-    };
+  function sanitizedPoints(stage, maximum = 1400) {
+    const source = Array.isArray(stage?.points) ? stage.points : [];
+    const valid = source.filter(validPoint).map((point) => ({
+      ...point,
+      lon: Number(point.lon),
+      lat: Number(point.lat),
+      ele: Number.isFinite(Number(point.ele)) ? Number(point.ele) : 0,
+      grade: Number.isFinite(Number(point.grade)) ? Number(point.grade) : 0
+    }));
+    if (valid.length <= maximum) return valid;
+    const step = Math.ceil(valid.length / maximum);
+    const sampled = valid.filter((_, index) => index % step === 0);
+    if (sampled[sampled.length - 1] !== valid[valid.length - 1]) sampled.push(valid[valid.length - 1]);
+    return sampled;
+  }
+
+  function stageFeatureCollection(stage, points) {
+    const features = [];
+    for (let i = 1; i < points.length; i++) {
+      features.push({
+        type: 'Feature',
+        id: `${stage.id || stage.number || 'stage'}-${i}`,
+        properties: {
+          kind: 'segment',
+          grade: Number(points[i].grade) || 0,
+          stageNumber: Number(stage.number) || 0,
+          renderSerial
+        },
+        geometry: {
+          type: 'LineString',
+          coordinates: [[points[i - 1].lon, points[i - 1].lat], [points[i].lon, points[i].lat]]
+        }
+      });
+    }
+    return { type: 'FeatureCollection', features };
   }
 
   function clearMarkers() {
@@ -227,17 +333,17 @@
   }
 
   function addMarker(point, className, popupText) {
-    if (!map || !point) return null;
-    const marker = new window.maplibregl.Marker({ element: markerElement(className), anchor: 'center' }).setLngLat([point.lon, point.lat]);
+    if (!map || !validPoint(point)) return null;
+    const marker = new window.maplibregl.Marker({ element: markerElement(className), anchor: 'center' }).setLngLat([Number(point.lon), Number(point.lat)]);
     if (popupText) marker.setPopup(new window.maplibregl.Popup({ offset: 18 }).setHTML(popupText));
     marker.addTo(map);
     persistentMarkers.push(marker);
     return marker;
   }
 
-  function boundsForStage(stage) {
+  function boundsForPoints(points) {
     const bounds = new window.maplibregl.LngLatBounds();
-    stage.points.forEach((point) => bounds.extend([point.lon, point.lat]));
+    points.forEach((point) => bounds.extend([point.lon, point.lat]));
     return bounds;
   }
 
@@ -245,43 +351,89 @@
     currentStage = stage;
     hoverPoint = null;
     stopAnimation();
-    if (renderer === 'maplibre' && map && loaded) renderMap(stage);
-    else drawFallback();
+    const serial = ++renderSerial;
+    updateSyncBadge(stage, 'ACTUALIZANDO');
+    if (renderer === 'maplibre' && map && loaded) {
+      requestAnimationFrame(() => renderMap(stage, serial));
+    } else {
+      updateSyncBadge(stage);
+      drawFallback();
+    }
   }
 
-  function renderMap(stage) {
-    if (!map || !loaded || !stage?.points?.length) return;
-    addRouteLayers();
-    map.getSource(routeSourceId)?.setData({ type: 'FeatureCollection', features: [stageFeature(stage)] });
-    clearMarkers();
+  function renderMap(stage, serial = renderSerial) {
+    if (!map || !loaded || serial !== renderSerial) return;
+    const points = sanitizedPoints(stage);
+    if (points.length < 2) {
+      updateSyncBadge(stage, 'GEOMETRÍA INVÁLIDA');
+      showMessage('La etapa seleccionada no contiene al menos dos coordenadas cartográficas válidas.', 6500);
+      return;
+    }
 
-    const first = stage.points[0];
-    const last = stage.points[stage.points.length - 1];
-    addMarker(first, 'route-marker start', `<strong>${escapeHtml(stage.startName)}</strong><br>Salida`);
-    addMarker(last, 'route-marker finish', `<strong>${escapeHtml(stage.finishName)}</strong><br>Meta`);
+    try {
+      map.stop();
+      if (!addRouteLayers()) throw new Error('Las capas del mapa todavía no están preparadas.');
+      const source = map.getSource(routeSourceId);
+      if (!source?.setData) throw new Error('La fuente GeoJSON de la ruta no está disponible.');
+      source.setData(stageFeatureCollection(stage, points));
+      clearMarkers();
 
-    (stage.climbs || []).slice(0, 6).forEach((climb) => {
-      const point = stage.points[climb.endIndex];
-      if (!point) return;
-      addMarker(point, 'route-marker climb', `<strong>${escapeHtml(climb.name)}</strong><br>Cat. ${escapeHtml(climb.category)} · ${climb.lengthKm.toFixed(1)} km al ${climb.avgGrade.toFixed(1)} %`);
-    });
+      const first = points[0];
+      const last = points[points.length - 1];
+      addMarker(first, 'route-marker start', `<strong>${escapeHtml(stage.startName)}</strong><br>Salida`);
+      addMarker(last, 'route-marker finish', `<strong>${escapeHtml(stage.finishName)}</strong><br>Meta`);
 
-    map.fitBounds(boundsForStage(stage), {
-      padding: { top: 70, bottom: 70, left: 55, right: 55 },
-      pitch: perspective === 'top' ? 0 : 64,
-      bearing: perspective === 'top' ? 0 : routeBearing(stage),
-      duration: 900,
-      maxZoom: 11.5
-    });
+      (stage.climbs || []).slice(0, 6).forEach((climb) => {
+        const originalPoint = stage.points?.[climb.endIndex];
+        if (!validPoint(originalPoint)) return;
+        addMarker(originalPoint, 'route-marker climb', `<strong>${escapeHtml(climb.name)}</strong><br>Cat. ${escapeHtml(climb.category)} · ${Number(climb.lengthKm || 0).toFixed(1)} km al ${Number(climb.avgGrade || 0).toFixed(1)} %`);
+      });
+
+      const bounds = boundsForPoints(points);
+      const padding = { top: 58, bottom: 58, left: 48, right: 48 };
+      const camera = map.cameraForBounds?.(bounds, { padding, maxZoom: 11.5 });
+      const target = camera || { center: bounds.getCenter(), zoom: 8 };
+      map.easeTo({
+        ...target,
+        pitch: perspective === 'top' ? 0 : 66,
+        bearing: perspective === 'top' ? 0 : routeBearingFromPoints(points),
+        duration: 720,
+        essential: true
+      });
+      map.triggerRepaint?.();
+      updateSyncBadge(stage);
+    } catch (error) {
+      console.warn('[Grand Tour Stage Lab] La ruta no pudo actualizarse en MapLibre; se reconstruirá el visor.', error);
+      updateSyncBadge(stage, 'REINTENTANDO');
+      showMessage(`Reintentando la sincronización del mapa: ${error.message}`, 4200);
+      window.setTimeout(() => {
+        if (serial !== renderSerial || renderer !== 'maplibre' || !map) return;
+        try {
+          if (map.getLayer(routeLineId)) map.removeLayer(routeLineId);
+          if (map.getLayer(routeOutlineId)) map.removeLayer(routeOutlineId);
+          if (map.getSource(routeSourceId)) map.removeSource(routeSourceId);
+          addRouteLayers();
+          renderMap(stage, serial);
+        } catch (retryError) {
+          console.error('[Grand Tour Stage Lab] Fallo definitivo al refrescar la ruta.', retryError);
+          updateSyncBadge(stage, 'MAPA DEGRADADO');
+        }
+      }, 180);
+    }
+  }
+
+  function routeBearingFromPoints(points) {
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (!first || !last) return 0;
+    const averageLat = (first.lat + last.lat) * Math.PI / 360;
+    const dx = (last.lon - first.lon) * Math.cos(averageLat);
+    const dy = last.lat - first.lat;
+    return ((Math.atan2(dx, dy) * 180 / Math.PI) + 360) % 360 - 18;
   }
 
   function routeBearing(stage) {
-    const first = stage.points[0];
-    const last = stage.points[stage.points.length - 1];
-    if (!first || !last) return 0;
-    const dx = last.lon - first.lon;
-    const dy = last.lat - first.lat;
-    return ((Math.atan2(dx, dy) * 180 / Math.PI) + 360) % 360 - 20;
+    return routeBearingFromPoints(sanitizedPoints(stage, 10000));
   }
 
   function escapeHtml(value) {
@@ -291,29 +443,34 @@
   function setPerspective(mode) {
     perspective = mode === 'top' ? 'top' : '3d';
     if (renderer === 'maplibre' && map) {
-      if (perspective === 'top') map.easeTo({ pitch: 0, bearing: 0, duration: 650 });
-      else map.easeTo({ pitch: 68, bearing: currentStage ? routeBearing(currentStage) : -12, duration: 650 });
+      map.stop();
+      map.easeTo({ pitch: perspective === 'top' ? 0 : 68, bearing: perspective === 'top' ? 0 : currentStage ? routeBearing(currentStage) : -12, duration: 650, essential: true });
+      if (currentStage) window.setTimeout(() => render(currentStage), 90);
     } else drawFallback();
   }
 
   function setTerrainExaggeration(value) {
     terrainExaggeration = Math.max(0, Number(value) || 0);
     if (renderer === 'maplibre' && map && loaded) {
-      try { map.setTerrain({ source: 'terrainSource', exaggeration: terrainExaggeration }); }
-      catch (error) { console.warn('No se pudo modificar el terreno', error); }
+      try {
+        map.setTerrain({ source: 'terrainSource', exaggeration: terrainExaggeration });
+        map.triggerRepaint?.();
+      } catch (error) {
+        console.warn('No se pudo modificar el terreno', error);
+      }
     } else drawFallback();
   }
 
   function highlightPoint(point) {
-    hoverPoint = point || null;
+    hoverPoint = validPoint(point) ? point : null;
     if (renderer === 'maplibre' && map && loaded) {
-      if (!point) {
+      if (!hoverPoint) {
         hoverMarker?.remove();
         hoverMarker = null;
         return;
       }
       if (!hoverMarker) hoverMarker = new window.maplibregl.Marker({ element: markerElement('rider-marker', '•'), anchor: 'center' }).addTo(map);
-      hoverMarker.setLngLat([point.lon, point.lat]);
+      hoverMarker.setLngLat([Number(hoverPoint.lon), Number(hoverPoint.lat)]);
     } else drawFallback();
   }
 
@@ -361,7 +518,7 @@
       const point = interpolatePoint(currentStage.points, eased);
       riderProgress = eased;
 
-      if (renderer === 'maplibre' && map && loaded && point) {
+      if (renderer === 'maplibre' && map && loaded && validPoint(point)) {
         riderMarker?.setLngLat([point.lon, point.lat]);
         if (progress > 0.02 && progress < 0.98) map.easeTo({ center: [point.lon, point.lat], duration: 0, essential: true });
       } else {
@@ -371,7 +528,7 @@
       if (progress >= 1) {
         stopAnimation(false);
         riderProgress = null;
-        if (renderer === 'maplibre') renderMap(currentStage);
+        if (renderer === 'maplibre') render(currentStage);
         else drawFallback();
         return;
       }
@@ -680,8 +837,10 @@
   }
 
   function resize() {
-    if (renderer === 'maplibre') map?.resize();
-    else drawFallback();
+    if (renderer === 'maplibre') {
+      map?.resize();
+      if (currentStage) window.setTimeout(() => render(currentStage), 80);
+    } else drawFallback();
   }
 
   window.Map3DView = {

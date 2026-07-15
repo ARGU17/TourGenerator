@@ -105,7 +105,7 @@
   }
 
   async function downloadTourZip(tour, onProgress) {
-    if (!window.JSZip) throw new Error('JSZip no está disponible. En la edición v1.2 está integrado dentro de index.html; vuelve a subir el archivo completo.');
+    if (!window.JSZip) throw new Error('JSZip no está disponible. En la edición v1.3 debe estar el archivo jszip.min.js en la raíz, junto a index.html.');
     const report = typeof onProgress === 'function' ? onProgress : () => {};
     const zip = new JSZip();
     const root = zip.folder(slugify(tour.title));
@@ -129,7 +129,7 @@
     }
 
     root.file('tour-manifest.json', JSON.stringify({
-      schema: 'grand-tour-stage-lab/tour-v1.2',
+      schema: 'grand-tour-stage-lab/tour-v1.3',
       id: tour.id,
       title: tour.title,
       createdAt: tour.createdAt,
@@ -160,7 +160,7 @@
       'MODO CARRETERAS REALES: consulta un servidor público Valhalla/OpenStreetMap; requiere Internet y está sujeto a disponibilidad y uso razonable.',
       '',
       'Fuente cartográfica del modo real: © OpenStreetMap contributors mediante Valhalla.',
-      'Generado con Grand Tour Stage Lab v1.2.'
+      'Generado con Grand Tour Stage Lab v1.3.'
     ].join('\n'));
 
     report({ phase: 'compress', percent: 47, detail: 'Comprimiendo GPX y JSON…' });

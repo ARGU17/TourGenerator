@@ -3,13 +3,14 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
-const root = path.resolve(__dirname, '..');
+const root = __dirname;
 global.window = global;
 require(path.join(root, 'config.js'));
-require(path.join(root, 'js', 'catalog.js'));
-require(path.join(root, 'js', 'generator.js'));
-require(path.join(root, 'js', 'export.js'));
+require(path.join(root, 'catalog.js'));
+require(path.join(root, 'generator.js'));
+require(path.join(root, 'export.js'));
 
 function validateTour(config) {
   const tour = StageGenerator.generateTour(config);
@@ -18,6 +19,7 @@ function validateTour(config) {
   assert.ok(tour.stages.every((stage) => Number.isFinite(stage.distanceKm) && stage.distanceKm > 0), 'Distancia inválida');
   assert.ok(tour.stages.every((stage) => Number.isFinite(stage.ascentM) && stage.ascentM >= 0), 'Desnivel inválido');
   assert.ok(tour.stages.every((stage) => stage.points.every((point) => [point.lat, point.lon, point.ele, point.distanceKm, point.grade].every(Number.isFinite))), 'Track con valores no finitos');
+  assert.ok(tour.stages.every((stage) => stage.points.every((point) => point.lat >= -85 && point.lat <= 85 && point.lon >= -180 && point.lon <= 180)), 'Track con coordenadas fuera del rango cartográfico');
   assert.ok(tour.stages.every((stage) => stage.distanceKm <= config.maxStageDistance + 0.01 || stage.type === 'itt'), 'Etapa por encima del máximo configurado');
 
   const gpx = RouteExport.stageToGPX(tour.stages[0]);
@@ -68,16 +70,29 @@ const base = {
   assert.equal(asyncTour.stages.length, 5);
   assert.ok(progressEvents.length >= 7, 'No se emitieron suficientes eventos de progreso');
   assert.equal(Math.round(progressEvents.at(-1).percent), 100, 'El progreso no terminó en 100 %');
-  assert.equal(progressEvents.filter((event) => event.phase === 'stage-complete').length, 5, 'No hay progreso por cada etapa');
+  assert.equal(progressEvents.filter((event) => event.phase === 'stage-complete').length, 5, 'No hay progreso por etapa');
 
-  const standalone = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-  assert.match(standalone, /Grand Tour Stage Lab v1\.2 standalone/);
-  assert.match(standalone, /data-bundled-source="js\/app\.js"/);
-  assert.match(standalone, /data-bundled-source="vendor\/jszip\.min\.js"/);
-  assert.doesNotMatch(standalone, /<script\s+defer\s+src="js\//);
-  assert.doesNotMatch(standalone, /<link\s+rel="stylesheet"\s+href="styles\.css"/);
+  const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.match(index, /terreno 3D · v1\.3/);
+  for (const file of ['jszip.min.js', 'config.js', 'vendor-loader.js', 'catalog.js', 'generator.js', 'export.js', 'profile.js', 'map3d.js', 'app.js']) {
+    assert.match(index, new RegExp(`src="${file.replace('.', '\\.')}`), `index.html no carga ${file} desde la raíz`);
+    assert.ok(fs.existsSync(path.join(root, file)), `Falta ${file} en la raíz`);
+  }
+  assert.doesNotMatch(index, /src="(?:js|vendor)\//, 'index.html todavía depende de carpetas');
 
-  console.log('✓ Smoke tests superados: generación, progreso, condicionantes, GPX e index autónomo.');
+  const mapCode = fs.readFileSync(path.join(root, 'map3d.js'), 'utf8');
+  assert.match(mapCode, /renderSerial/);
+  assert.match(mapCode, /cameraForBounds/);
+  assert.match(mapCode, /stageFeatureCollection/);
+  assert.match(mapCode, /map\.stop\(\)/);
+  assert.match(mapCode, /map-sync-badge/);
+  assert.doesNotMatch(mapCode, /tiles\.mapterhorn\.com/);
+
+  for (const file of ['vendor-loader.js', 'catalog.js', 'generator.js', 'export.js', 'profile.js', 'map3d.js', 'app.js']) {
+    new vm.Script(fs.readFileSync(path.join(root, file), 'utf8'), { filename: file });
+  }
+
+  console.log('✓ v1.3: generación, GPX, progreso, estructura plana y sincronización del mapa validadas.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

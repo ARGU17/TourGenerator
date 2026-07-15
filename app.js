@@ -404,6 +404,8 @@
       state.tour.stages[state.selectedIndex] = routed;
       await delay(20);
       renderTour();
+      await delay(70);
+      window.Map3DView?.render?.(routed);
       setRoutingBadge('live', 'Ruta OpenStreetMap');
       const delta = Math.abs(routed.distanceDifferencePct || 0);
       finishProcess(true, 'Etapa enrutada por carreteras reales', `${routed.routeLabel}: ${formatNumber(routed.distanceKm, 1)} km y ${formatNumber(routed.ascentM, 0)} m+.`, { counter: '1/1 etapas' });
@@ -478,6 +480,9 @@
     el.exportTourBtn.disabled = false;
     el.routeTourBtn.textContent = `Enrutar ${state.tour.stages.length} etapas`;
     renderTour();
+    await delay(80);
+    const selectedStage = state.tour?.stages[state.selectedIndex];
+    if (selectedStage) window.Map3DView?.render?.(selectedStage);
 
     const attempted = successes + failures;
     if (cancelled) {
@@ -496,9 +501,38 @@
   }
 
   function renderStageListOnly() {
-    const selected = state.selectedIndex;
-    renderTour();
-    state.selectedIndex = selected;
+    const tour = state.tour;
+    if (!tour) return;
+    const stats = window.StageGenerator.tourStats(tour);
+    el.tourTitle.textContent = tour.title;
+    el.stageCounter.textContent = tour.stages.length;
+    el.tourSummary.innerHTML = [
+      summaryItem(`${formatNumber(stats.distanceKm, 0)} km`, 'Distancia real'),
+      summaryItem(`${formatNumber(stats.ascentM, 0)} m+`, 'Desnivel acumulado'),
+      summaryItem(`${stats.mountainStages}`, 'Etapas de montaña'),
+      summaryItem(`${stats.realStages}/${tour.stages.length}`, 'Enrutadas por OSM')
+    ].join('');
+
+    el.stageList.innerHTML = tour.stages.map((stage, index) => {
+      const active = index === state.selectedIndex ? 'active' : '';
+      const realClass = stage.routeStatus === 'real' ? 'live' : '';
+      return `
+        <button class="stage-card ${active}" data-stage-index="${index}">
+          <span class="stage-number">${String(stage.number).padStart(2, '0')}</span>
+          <span class="stage-card-main">
+            <strong>${escapeHtml(stage.routeLabel)}</strong>
+            <span>${stage.flag} ${escapeHtml(stage.regionName)} · ${escapeHtml(stageDifficultyLabel(stage))}</span>
+          </span>
+          <span class="stage-card-meta">
+            <strong>${formatNumber(stage.distanceKm, 1)} km</strong>
+            <span><i class="stage-route-state ${realClass}"></i>${formatNumber(stage.ascentM, 0)} m+</span>
+          </span>
+        </button>`;
+    }).join('');
+
+    el.stageList.querySelectorAll('[data-stage-index]').forEach((button) => {
+      button.addEventListener('click', () => selectStage(Number(button.dataset.stageIndex)));
+    });
   }
 
   function setStageButtonsDisabled(disabled) {
@@ -653,7 +687,7 @@
       initOptionalViews();
 
       if (!window.StageGenerator || !window.CYCLING_CATALOG || !window.RouteExport) {
-        throw new Error('El núcleo JavaScript no se ha cargado. Usa el index.html autónomo incluido en el ZIP v1.2.');
+        throw new Error('El núcleo JavaScript no se ha cargado. Comprueba que index.html y todos los archivos .js están juntos en la raíz del repositorio v1.3.');
       }
 
       enableCoreButtons();

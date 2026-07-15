@@ -453,7 +453,7 @@ body::before {
 .maplibregl-popup { position: absolute; top: 0; left: 0; display: flex; pointer-events: none; }
 .maplibregl-popup-content { padding: 9px 11px; border-radius: 8px; background: #f1f6f9; color: #071018; font-size: 11px; box-shadow: 0 8px 30px rgba(0,0,0,.35); pointer-events: auto; }
 
-/* v1.2 — progreso verificable, diagnóstico y modo autónomo ---------------- */
+/* v1.2+ — progreso verificable, diagnóstico y modo autónomo ---------------- */
 .process-panel {
   position: fixed;
   z-index: 1600;
@@ -502,4 +502,27 @@ body::before {
   .process-panel { top: 10px; padding: 12px; }
   .process-title-wrap span:not(.process-icon) { white-space: normal; }
   .process-log { max-height: 54px; }
+}
+
+/* v1.3 — sincronización explícita entre etapa, GeoJSON y cámara 3D */
+.map-sync-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 8;
+  max-width: calc(100% - 130px);
+  padding: 5px 9px;
+  border: 1px solid rgba(114, 240, 168, .30);
+  border-radius: 999px;
+  background: rgba(5, 11, 17, .82);
+  box-shadow: 0 5px 18px rgba(0, 0, 0, .22);
+  color: rgba(223, 255, 236, .92);
+  font-size: 8px;
+  line-height: 1.1;
+  font-weight: 900;
+  letter-spacing: .07em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }

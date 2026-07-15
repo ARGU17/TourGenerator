@@ -1,9 +1,10 @@
 window.APP_CONFIG = {
   appName: 'Grand Tour Stage Lab',
-  version: '1.2.0-progress',
+  version: '1.3.0-map-sync',
   valhallaEndpoint: 'https://valhalla1.openstreetmap.de/route',
   valhallaClientId: 'grand-tour-stage-lab.github.io',
-  terrainTileJson: 'https://tiles.mapterhorn.com/tilejson.json',
+  terrainTileJson: 'https://demotiles.maplibre.org/terrain-tiles/tiles.json',
+  terrainEncoding: 'mapbox',
   mapRasterTiles: [
     'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
     'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
