@@ -104,21 +104,32 @@
     downloadBlob(new Blob([stageToGPX(stage)], { type: 'application/gpx+xml;charset=utf-8' }), filename);
   }
 
-  async function downloadTourZip(tour) {
-    if (!window.JSZip) throw new Error('JSZip no está disponible. Comprueba que has subido la carpeta /vendor completa.');
+  async function downloadTourZip(tour, onProgress) {
+    if (!window.JSZip) throw new Error('JSZip no está disponible. En la edición v1.2 está integrado dentro de index.html; vuelve a subir el archivo completo.');
+    const report = typeof onProgress === 'function' ? onProgress : () => {};
     const zip = new JSZip();
     const root = zip.folder(slugify(tour.title));
     const gpxFolder = root.folder('gpx');
     const jsonFolder = root.folder('json');
 
-    tour.stages.forEach((stage) => {
+    report({ phase: 'files', percent: 2, detail: 'Creando la estructura del ZIP…' });
+    for (let index = 0; index < tour.stages.length; index++) {
+      const stage = tour.stages[index];
       const baseName = `${String(stage.number).padStart(2, '0')}-${slugify(stage.routeLabel)}`;
       gpxFolder.file(`${baseName}.gpx`, stageToGPX(stage));
       jsonFolder.file(`${baseName}.json`, stageToJSON(stage));
-    });
+      report({
+        phase: 'files',
+        completed: index + 1,
+        total: tour.stages.length,
+        percent: 3 + ((index + 1) / Math.max(1, tour.stages.length)) * 42,
+        detail: `Añadiendo etapa ${index + 1}/${tour.stages.length}: ${stage.routeLabel}.`
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
 
     root.file('tour-manifest.json', JSON.stringify({
-      schema: 'grand-tour-stage-lab/tour-v1',
+      schema: 'grand-tour-stage-lab/tour-v1.2',
       id: tour.id,
       title: tour.title,
       createdAt: tour.createdAt,
@@ -145,12 +156,24 @@
       '- /json: datos enriquecidos con distancia, elevación, pendiente y puertos.',
       '- tour-manifest.json: índice completo de la vuelta.',
       '',
-      'Fuente cartográfica del modo real: OpenStreetMap contributors mediante Valhalla.',
-      'Generado con Grand Tour Stage Lab.'
+      'MODO LOCAL: no requiere cuenta, clave API, pago ni conexión para generar y exportar los GPX incluidos.',
+      'MODO CARRETERAS REALES: consulta un servidor público Valhalla/OpenStreetMap; requiere Internet y está sujeto a disponibilidad y uso razonable.',
+      '',
+      'Fuente cartográfica del modo real: © OpenStreetMap contributors mediante Valhalla.',
+      'Generado con Grand Tour Stage Lab v1.2.'
     ].join('\n'));
 
-    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    report({ phase: 'compress', percent: 47, detail: 'Comprimiendo GPX y JSON…' });
+    const blob = await zip.generateAsync(
+      { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+      (metadata) => {
+        const percent = 47 + (Number(metadata.percent || 0) / 100) * 51;
+        report({ phase: 'compress', percent, detail: `Comprimiendo: ${Math.round(metadata.percent || 0)} %.` });
+      }
+    );
+    report({ phase: 'download', percent: 99, detail: 'Preparando la descarga…' });
     downloadBlob(blob, `${slugify(tour.title)}-${tour.config.seed}.zip`);
+    report({ phase: 'complete', percent: 100, detail: 'ZIP descargado.' });
   }
 
   window.RouteExport = { stageToGPX, stageToJSON, downloadStageGPX, downloadTourZip, slugify };

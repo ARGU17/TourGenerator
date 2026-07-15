@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
@@ -39,23 +40,45 @@ const base = {
   maxStageDistance: 225
 };
 
-for (const mode of ['europe', 'france', 'spain', 'italy']) {
-  for (const seed of [1, 42, 20260714]) validateTour({ ...base, mode, seed });
-}
+(async () => {
+  for (const mode of ['europe', 'france', 'spain', 'italy']) {
+    for (const seed of [1, 42, 20260714]) validateTour({ ...base, mode, seed });
+  }
 
-const parsed = StageGenerator.parseNaturalConditions(
-  '18 etapas en España, 6 llanas, 4 de alta montaña, 2 CRI, 3 finales en alto, máximo 205 km y 2900 km totales, semilla 9876',
-  { ...base, mode: 'europe' }
-);
-assert.equal(parsed.mode, 'spain');
-assert.equal(parsed.stageCount, 18);
-assert.equal(parsed.flatCount, 6);
-assert.equal(parsed.highCount, 4);
-assert.equal(parsed.ittCount, 2);
-assert.equal(parsed.summitCount, 3);
-assert.equal(parsed.maxStageDistance, 205);
-assert.equal(parsed.totalDistance, 2900);
-assert.equal(parsed.seed, 9876);
-validateTour(parsed);
+  const parsed = StageGenerator.parseNaturalConditions(
+    '18 etapas en España, 6 llanas, 4 de alta montaña, 2 CRI, 3 finales en alto, máximo 205 km y 2900 km totales, semilla 9876',
+    { ...base, mode: 'europe' }
+  );
+  assert.equal(parsed.mode, 'spain');
+  assert.equal(parsed.stageCount, 18);
+  assert.equal(parsed.flatCount, 6);
+  assert.equal(parsed.highCount, 4);
+  assert.equal(parsed.ittCount, 2);
+  assert.equal(parsed.summitCount, 3);
+  assert.equal(parsed.maxStageDistance, 205);
+  assert.equal(parsed.totalDistance, 2900);
+  assert.equal(parsed.seed, 9876);
+  validateTour(parsed);
 
-console.log('✓ Smoke tests superados: generación, condicionantes y GPX.');
+  const progressEvents = [];
+  const asyncTour = await StageGenerator.generateTourAsync(
+    { ...base, mode: 'france', stageCount: 5, flatCount: 2, rollingCount: 1, mediumCount: 1, highCount: 1, ittCount: 0, totalDistance: 740, seed: 31415 },
+    (event) => progressEvents.push(event)
+  );
+  assert.equal(asyncTour.stages.length, 5);
+  assert.ok(progressEvents.length >= 7, 'No se emitieron suficientes eventos de progreso');
+  assert.equal(Math.round(progressEvents.at(-1).percent), 100, 'El progreso no terminó en 100 %');
+  assert.equal(progressEvents.filter((event) => event.phase === 'stage-complete').length, 5, 'No hay progreso por cada etapa');
+
+  const standalone = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.match(standalone, /Grand Tour Stage Lab v1\.2 standalone/);
+  assert.match(standalone, /data-bundled-source="js\/app\.js"/);
+  assert.match(standalone, /data-bundled-source="vendor\/jszip\.min\.js"/);
+  assert.doesNotMatch(standalone, /<script\s+defer\s+src="js\//);
+  assert.doesNotMatch(standalone, /<link\s+rel="stylesheet"\s+href="styles\.css"/);
+
+  console.log('✓ Smoke tests superados: generación, progreso, condicionantes, GPX e index autónomo.');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

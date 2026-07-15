@@ -1,83 +1,106 @@
-# Grand Tour Stage Lab 🚴‍♂️
+# Grand Tour Stage Lab v1.2 🚴‍♂️
 
-Aplicación web estática para generar vueltas ciclistas de **1 a 30 etapas** en Francia, España, Italia o combinando los tres países.
+Aplicación web estática para generar vueltas ciclistas de **1 a 30 etapas** en Francia, España, Italia o combinando los tres países. Incluye perfil altimétrico, visualización 3D local y exportación GPX/JSON.
 
-## Versión 1.1 — corrección de arranque
+## Qué corrige esta versión
 
-Esta versión corrige el fallo por el que la interfaz HTML aparecía, pero el libro de ruta quedaba vacío y los botones no respondían.
+La versión anterior podía parecer completamente bloqueada por dos motivos:
 
-La causa principal era que las bibliotecas externas se cargaban de manera bloqueante antes del núcleo local. Cuando GitHub Pages, el navegador, una red corporativa o un bloqueador no podía resolver alguno de esos CDN, el navegador no alcanzaba `app.js`; por tanto, no se generaban etapas ni se enlazaban los eventos de los botones.
+1. La generación de 21 etapas se ejecutaba como una operación JavaScript síncrona. Mientras el navegador calculaba, no podía repintar la interfaz; por eso no se veía ningún cambio aunque el proceso siguiera activo.
+2. Si estaba marcada la opción **Enrutar automáticamente al generar**, al terminar el cálculo local se iniciaban hasta 21 consultas externas a Valhalla. Un servidor lento, una restricción CORS o una caída temporal podían prolongar el proceso sin feedback visible.
+3. Un despliegue incompleto en GitHub Pages podía dejar `index.html` y CSS visibles, pero perder uno o varios archivos JavaScript relativos.
 
-Cambios aplicados:
+La v1.2 resuelve los tres puntos:
 
-- Los scripts locales arrancan antes que las dependencias visuales opcionales.
-- Ningún fallo de MapLibre o ECharts puede bloquear los botones.
-- Se incorpora un perfil SVG interactivo local, sin dependencia de Internet.
-- Se incorpora una vista 2.5D/3D Canvas local, sin dependencia de Internet.
-- MapLibre y ECharts se cargan después, de forma asíncrona, y mejoran los visores si están disponibles.
-- JSZip se incluye dentro de `/vendor`, por lo que la exportación ZIP ya no depende de un CDN.
-- El generador, los condicionantes, la regeneración y el GPX funcionan totalmente offline.
-- Se añade una prueba automática ejecutable con `npm test`.
+- Generación asíncrona etapa por etapa.
+- Barra de progreso real con porcentaje, contador, tiempo transcurrido y registro de operaciones.
+- Progreso independiente para generar, regenerar, enrutar, exportar una etapa y exportar el ZIP.
+- Cancelación entre etapas para generación y enrutado completo.
+- Tiempo máximo de espera en peticiones Valhalla.
+- Detención automática después de tres fallos externos consecutivos.
+- `index.html` **autónomo**: CSS, generador, visores locales y JSZip están integrados dentro del mismo archivo.
+- El enrutado automático siempre arranca desactivado.
+- Diagnóstico visible si ocurre un error JavaScript.
 
-## Funcionalidades
+## Modos de funcionamiento
 
-- Generación de vueltas de 21 etapas con reparto realista entre llano, media montaña, alta montaña y contrarreloj.
-- Catálogo geográfico con regiones, ciudades y puertos reales de Francia, España e Italia.
-- Perfil altimétrico interactivo, coloreado por pendiente y con puertos/sprint señalados.
-- Visualización local 3D/2.5D y mejora opcional sobre terreno cartográfico con MapLibre GL JS.
-- Animación de un corredor recorriendo la etapa.
-- Regeneración de una etapa concreta sin modificar el resto de la vuelta.
-- Interpretación de condicionantes escritos en español.
-- Conversión opcional a carreteras reales de OpenStreetMap mediante Valhalla.
-- Exportación individual GPX y exportación completa ZIP con GPX + JSON + manifiesto.
-- Despliegue automático en GitHub Pages.
+### 1. Generación local — gratuita y autónoma
 
-## Funcionamiento de los modos
+Funciona sin:
 
-### 1. Datos incluidos — siempre disponible
+- Cuenta.
+- Clave API.
+- Tarjeta bancaria.
+- Backend.
+- Instalación de Node.js.
+- Conexión a Internet para generar o exportar.
 
-La aplicación funciona inmediatamente, sin claves API y aunque el navegador no tenga acceso a los CDN. Genera rutas geográficas coherentes a partir de ciudades y puertos reales del catálogo, con perfiles altimétricos procedurales calibrados para cada tipo de etapa.
+Produce recorridos GPX completos con coordenadas, distancia, elevación, pendiente, puertos y sprints. Los trazados locales se construyen a partir del catálogo incluido de ciudades, regiones y puertos reales, pero la línea entre puntos es procedural: **no garantiza que cada metro siga una carretera cartografiada**.
 
-El perfil local y el visor 3D local también funcionan sin conexión. En la esquina de cada visualizador se muestra `PERFIL LOCAL` o `3D LOCAL` cuando se está usando este modo resistente a fallos.
+### 2. Carreteras reales — opcional
 
-### 2. Visualización cartográfica mejorada — opcional
+Los botones **Carreteras reales** y **Enrutar N etapas** consultan el servidor público de Valhalla sobre OpenStreetMap.
 
-Tras arrancar el núcleo, la aplicación intenta cargar MapLibre y ECharts de forma asíncrona. Si las bibliotecas y los tiles externos están disponibles, los visores se actualizan automáticamente. Si no están disponibles, la aplicación conserva los visores locales y el resto de funciones continúa operativo.
-
-### 3. Carreteras reales — requiere servicio Valhalla
-
-El botón **Carreteras reales** sustituye la geometría incluida por una ruta calculada sobre la red ciclable de OpenStreetMap usando Valhalla.
-
-El botón **Enrutar 21 etapas** procesa toda la vuelta secuencialmente y conserva automáticamente la versión incluida de las etapas que no puedan enrutarse.
+- No requiere clave API ni pago.
+- Sí requiere Internet.
+- Es un servicio comunitario externo sin garantía de disponibilidad.
+- Está sujeto a uso razonable y limitación de peticiones.
+- Si falla, la aplicación conserva íntegramente el GPX local.
 
 Endpoint predeterminado:
 
-`https://valhalla1.openstreetmap.de/route`
+```text
+https://valhalla1.openstreetmap.de/route
+```
 
-Es un servicio externo. Puede fallar por límites de uso, CORS, indisponibilidad temporal o políticas de la red. Ese fallo ya no impide generar ni visualizar las etapas incluidas.
+La aplicación envía las solicitudes secuencialmente con más de un segundo entre ellas y utiliza un identificador `X-Client-Id`.
 
-## Sustituir la versión anterior en GitHub
+## Barra de progreso
 
-1. Conserva una copia del repositorio anterior si contiene cambios propios.
-2. Descomprime este ZIP.
-3. Sustituye **todos** los archivos del repositorio por el contenido de esta carpeta.
-4. Comprueba especialmente que existen:
-   - `js/vendor-loader.js`
-   - `vendor/jszip.min.js`
-   - las carpetas completas `js/`, `vendor/` y `.github/`
-5. Haz commit y push.
-6. En GitHub abre `Actions` y espera a que finalice **Deploy GitHub Pages**.
-7. Recarga la web con `Ctrl+F5` para evitar que el navegador reutilice el JavaScript antiguo.
+Cada proceso muestra:
 
-No hay que ejecutar `npm install` para publicar la aplicación.
+- Porcentaje de avance.
+- Etapa o archivo actual.
+- Tiempo transcurrido.
+- Últimas operaciones realizadas.
+- Resultado final o mensaje de error.
 
-## Publicación nueva en GitHub Pages
+Procesos cubiertos:
 
-1. Crea un repositorio nuevo.
-2. Sube **todo el contenido de esta carpeta a la raíz**.
+- Arranque inicial.
+- Generación completa.
+- Regeneración de una etapa.
+- Enrutado real de una etapa.
+- Enrutado real de toda la vuelta.
+- Exportación GPX individual.
+- Exportación ZIP completa.
+
+## Publicar en GitHub Pages
+
+1. Descomprime el ZIP.
+2. Sube **todo el contenido** a la raíz del repositorio.
 3. Abre `Settings` → `Pages`.
-4. En `Build and deployment`, selecciona `GitHub Actions`.
-5. Ejecuta o espera al workflow `Deploy GitHub Pages`.
+4. Selecciona `GitHub Actions`.
+5. Espera a que el workflow `Deploy GitHub Pages` termine correctamente.
+6. Abre la página y fuerza una recarga con `Ctrl + F5`.
+
+El archivo esencial es:
+
+```text
+index.html
+```
+
+En esta versión es autónomo. Aunque las carpetas `js/`, `vendor/` y `styles.css` se mantienen como código fuente editable, GitHub Pages puede ejecutar la aplicación únicamente con el `index.html` generado.
+
+## Uso
+
+1. Ajusta país, número de etapas, kilómetros y reparto deportivo.
+2. Mantén desmarcado **Enrutar automáticamente al generar** para una generación inmediata y autónoma.
+3. Pulsa **Generar nueva vuelta**.
+4. Observa la barra de progreso.
+5. Revisa perfiles y visualización 3D.
+6. Exporta una etapa con **GPX** o toda la vuelta con **Exportar ZIP**.
+7. Usa **Carreteras reales** solo cuando quieras sustituir un trazado local por una ruta OSM y dispongas de Internet.
 
 ## Ejemplos de condicionantes
 
@@ -86,91 +109,61 @@ No hay que ejecutar `npm install` para publicar la aplicación.
 - `21 etapas en Italia, 6 llanas, 4 quebradas, 4 de media montaña, 5 de alta montaña y 2 contrarrelojes.`
 - `Gran vuelta europea de 24 etapas, 3 CRI, 6 finales en alto, máximo 220 km y semilla 54321.`
 
-Tras pulsar **Interpretar condicionantes**, los valores detectados se trasladan al formulario. Después se pulsa **Generar nueva vuelta**.
-
 ## Pruebas
 
-No son necesarias para desplegar, pero permiten validar el generador localmente si Node.js está instalado:
+No son necesarias para publicar. Con Node.js instalado:
 
 ```bash
 npm test
 ```
 
-La prueba cubre:
+Se valida:
 
-- Francia, España, Italia y vuelta europea.
+- Francia, España, Italia y modo europeo.
 - Varias semillas.
-- Validez de puntos, distancia y desnivel.
-- Interpretación de condicionantes.
-- Creación del contenido GPX 1.1.
+- Coordenadas, distancia, elevación y pendiente.
+- Condicionantes en lenguaje natural.
+- Exportación GPX 1.1.
+- Generación asíncrona y eventos de progreso.
+- Integridad del `index.html` autónomo.
+
+## Reconstruir el index autónomo
+
+Después de modificar los archivos fuente:
+
+```bash
+python tools/build-standalone.py
+```
+
+Esto vuelve a integrar `styles.css`, los módulos de `/js` y JSZip dentro de `index.html`.
 
 ## Estructura
 
 ```text
 .
-├── index.html
+├── index.html                    # versión autónoma para GitHub Pages
+├── source/index.modular.html     # plantilla mantenible
 ├── styles.css
 ├── config.js
 ├── package.json
 ├── js/
-│   ├── vendor-loader.js
-│   ├── catalog.js
-│   ├── generator.js
-│   ├── map3d.js
-│   ├── profile.js
-│   ├── export.js
-│   └── app.js
-├── vendor/
-│   └── jszip.min.js
-├── tests/
-│   └── smoke-test.js
+├── vendor/jszip.min.js
+├── tools/build-standalone.py
+├── tests/smoke-test.js
 ├── worker/
-│   ├── valhalla-proxy.js
-│   └── wrangler.toml.example
 ├── .github/workflows/pages.yml
 ├── .nojekyll
 ├── LICENSE
 └── README.md
 ```
 
-## Configuración externa
-
-Los parámetros están en `config.js`:
-
-```js
-window.APP_CONFIG = {
-  version: '1.1.0-fixed',
-  valhallaEndpoint: 'https://valhalla1.openstreetmap.de/route',
-  terrainTileJson: 'https://tiles.mapterhorn.com/tilejson.json',
-  routeRequestDelayMs: 1200,
-  elevationIntervalM: 30
-};
-```
-
-Puede cambiarse `valhallaEndpoint` por una instancia propia o por el proxy opcional incluido en `worker/`.
-
-## Diagnóstico rápido
-
-Si vuelve a aparecer solo la estructura vacía:
-
-1. Abre las herramientas de desarrollo del navegador (`F12`).
-2. Revisa `Console` y `Network`.
-3. Comprueba que `js/app.js`, `js/generator.js`, `js/catalog.js` y `vendor/jszip.min.js` responden con HTTP 200.
-4. Comprueba que GitHub no ha colocado la aplicación dentro de una subcarpeta adicional.
-5. Fuerza una recarga con `Ctrl+F5`.
-
-La aplicación expone `window.GT_STAGE_LAB` después de arrancar. En la consola, esta comprobación debe devolver `true`:
-
-```js
-Boolean(window.GT_STAGE_LAB && window.GT_STAGE_LAB.state.tour)
-```
-
 ## Datos y atribución
 
-- Cartografía base: © OpenStreetMap contributors.
-- Routing real: Valhalla sobre datos OpenStreetMap.
-- Terreno cartográfico: Mapterhorn DEM tiles, sujeto a disponibilidad del servicio.
-- Visualización opcional: MapLibre GL JS y Apache ECharts.
+- Modo real: © OpenStreetMap contributors.
+- Motor de routing real: Valhalla.
+- Visor cartográfico opcional: MapLibre GL JS.
+- Gráfico opcional: Apache ECharts.
+- El perfil y el visor 3D local funcionan sin estas bibliotecas externas.
 
 ## Licencia
 

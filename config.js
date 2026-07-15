@@ -1,6 +1,6 @@
 window.APP_CONFIG = {
   appName: 'Grand Tour Stage Lab',
-  version: '1.1.0-fixed',
+  version: '1.2.0-progress',
   valhallaEndpoint: 'https://valhalla1.openstreetmap.de/route',
   valhallaClientId: 'grand-tour-stage-lab.github.io',
   terrainTileJson: 'https://tiles.mapterhorn.com/tilejson.json',
@@ -23,5 +23,6 @@ window.APP_CONFIG = {
   ],
   vendorTimeoutMs: 5500,
   routeRequestDelayMs: 1200,
+  routeRequestTimeoutMs: 10000,
   elevationIntervalM: 30
 };

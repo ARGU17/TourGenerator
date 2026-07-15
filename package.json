@@ -1,8 +1,8 @@
 {
   "name": "grand-tour-stage-generator",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "Generador estático de etapas ciclistas con perfil, vista 3D y exportación GPX.",
+  "description": "Generador autónomo de etapas ciclistas con progreso, perfil, vista 3D y exportación GPX.",
   "scripts": {
     "test": "node tests/smoke-test.js"
   },

@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#071018" />
+  <meta name="description" content="Generador procedural de etapas ciclistas de Gran Vuelta con perfiles altimétricos, terreno 3D y exportación GPX." />
+  <title>Grand Tour Stage Lab</title>
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="appShell" class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark">GT</div>
+        <div>
+          <h1>Grand Tour Stage Lab</h1>
+          <p>Generador de recorridos, GPX, perfil y terreno 3D · v1.2</p>
+        </div>
+      </div>
+
+      <div class="top-actions">
+        <span id="routingBadge" class="status-badge status-busy">Cargando motor</span>
+        <button id="generateTourBtn" class="btn btn-primary" disabled>Generar vuelta</button>
+        <button id="routeTourBtn" class="btn btn-secondary" disabled title="Convierte las etapas al trazado real de OpenStreetMap mediante Valhalla">Enrutar 21 etapas</button>
+        <button id="exportTourBtn" class="btn btn-ghost" disabled>Exportar ZIP</button>
+      </div>
+    </header>
+
+    <section id="processPanel" class="process-panel" aria-live="polite" aria-label="Progreso del proceso actual">
+      <div class="process-topline">
+        <div class="process-title-wrap">
+          <span id="processIcon" class="process-icon">⚙</span>
+          <div>
+            <strong id="processTitle">Cargando motor local</strong>
+            <span id="processDetail">Preparando el generador autónomo…</span>
+          </div>
+        </div>
+        <div class="process-actions">
+          <strong id="processPercent">0 %</strong>
+          <button id="cancelProcessBtn" class="btn btn-ghost btn-small hidden" type="button">Cancelar</button>
+          <button id="closeProcessBtn" class="icon-btn hidden" type="button" title="Cerrar progreso">×</button>
+        </div>
+      </div>
+      <div class="process-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="processBar" class="process-bar" style="width:0%"></div>
+      </div>
+      <div class="process-meta">
+        <span id="processCounter">Inicializando…</span>
+        <span id="processElapsed">0,0 s</span>
+      </div>
+      <div id="processLog" class="process-log"></div>
+    </section>
+
+    <aside class="stage-sidebar panel">
+      <div class="panel-heading">
+        <div>
+          <span class="eyebrow">Libro de ruta</span>
+          <h2 id="tourTitle">Gran Vuelta Europea</h2>
+        </div>
+        <span id="stageCounter" class="counter-pill">21</span>
+      </div>
+      <div id="tourSummary" class="tour-summary"></div>
+      <div id="stageList" class="stage-list" aria-label="Listado de etapas"></div>
+    </aside>
+
+    <main class="workspace">
+      <section class="stage-hero panel">
+        <div class="stage-title-row">
+          <div>
+            <span id="stageTypeLabel" class="stage-type-chip">MONTAÑA</span>
+            <h2 id="stageTitle">Etapa 1</h2>
+            <p id="stageRouteLabel">Salida → Meta</p>
+          </div>
+          <div class="stage-actions">
+            <button id="routeStageBtn" class="btn btn-secondary">Carreteras reales</button>
+            <button id="regenerateStageBtn" class="btn btn-ghost">Regenerar</button>
+            <button id="exportStageBtn" class="btn btn-ghost">GPX</button>
+          </div>
+        </div>
+
+        <div id="stageStats" class="metric-grid"></div>
+      </section>
+
+      <section class="map-panel panel">
+        <div class="view-toolbar">
+          <div class="segmented-control" role="group" aria-label="Vista del mapa">
+            <button id="view3dBtn" class="segmented active">3D</button>
+            <button id="viewTopBtn" class="segmented">Cenital</button>
+          </div>
+          <div class="map-controls">
+            <label class="compact-control">
+              <span>Exageración</span>
+              <input id="terrainExaggeration" type="range" min="0" max="2.5" step="0.1" value="1.2" />
+            </label>
+            <button id="playRouteBtn" class="btn btn-small btn-primary">▶ Recorrer</button>
+          </div>
+        </div>
+        <div id="map" aria-label="Mapa tridimensional de la etapa"></div>
+        <div id="mapMessage" class="map-message hidden"></div>
+      </section>
+
+      <section class="profile-panel panel">
+        <div class="profile-header">
+          <div>
+            <span class="eyebrow">Perfil interactivo</span>
+            <h3>Altimetría y pendiente</h3>
+          </div>
+          <div class="profile-legend">
+            <span><i class="legend-dot descent"></i>Descenso</span>
+            <span><i class="legend-dot flat"></i>Llano</span>
+            <span><i class="legend-dot climb"></i>Subida</span>
+            <span><i class="legend-dot steep"></i>&gt;8 %</span>
+          </div>
+        </div>
+        <div id="profileChart"></div>
+      </section>
+    </main>
+
+    <aside class="generator-sidebar panel">
+      <div class="panel-heading">
+        <div>
+          <span class="eyebrow">Configuración</span>
+          <h2>Condicionantes</h2>
+        </div>
+        <button id="resetConfigBtn" class="icon-btn" title="Restablecer">↺</button>
+      </div>
+
+      <div class="form-stack">
+        <label class="field">
+          <span>País / formato</span>
+          <select id="tourMode">
+            <option value="europe">Francia + España + Italia</option>
+            <option value="france">Solo Francia</option>
+            <option value="spain">Solo España</option>
+            <option value="italy">Solo Italia</option>
+          </select>
+        </label>
+
+        <div class="field-grid two">
+          <label class="field">
+            <span>Etapas</span>
+            <input id="stageCount" type="number" min="1" max="30" value="21" />
+          </label>
+          <label class="field">
+            <span>Semilla</span>
+            <input id="seedInput" type="number" min="1" value="20260714" />
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Distancia total objetivo (km)</span>
+          <input id="totalDistance" type="number" min="100" max="6000" step="50" value="3350" />
+        </label>
+
+        <div class="field-grid two">
+          <label class="field">
+            <span>Llanas</span>
+            <input id="flatCount" type="number" min="0" max="30" value="7" />
+          </label>
+          <label class="field">
+            <span>Quebradas</span>
+            <input id="rollingCount" type="number" min="0" max="30" value="4" />
+          </label>
+          <label class="field">
+            <span>Media montaña</span>
+            <input id="mediumCount" type="number" min="0" max="30" value="3" />
+          </label>
+          <label class="field">
+            <span>Alta montaña</span>
+            <input id="highCount" type="number" min="0" max="30" value="5" />
+          </label>
+          <label class="field">
+            <span>CRI</span>
+            <input id="ittCount" type="number" min="0" max="10" value="2" />
+          </label>
+          <label class="field">
+            <span>Finales en alto</span>
+            <input id="summitCount" type="number" min="0" max="15" value="4" />
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Distancia máxima por etapa (km)</span>
+          <input id="maxStageDistance" type="number" min="30" max="300" value="225" />
+        </label>
+
+        <label class="field">
+          <span>Petición en lenguaje natural</span>
+          <textarea id="naturalConditions" rows="5" placeholder="Ejemplo: 21 etapas en España, 7 llanas, 5 de alta montaña, 2 CRI, 4 finales en alto, máximo 210 km y 3300 km totales."></textarea>
+        </label>
+
+        <button id="applyNaturalBtn" class="btn btn-secondary full-width">Interpretar condicionantes</button>
+        <button id="generateFromPanelBtn" class="btn btn-primary full-width">Generar nueva vuelta</button>
+
+        <div class="settings-divider"></div>
+
+        <div class="endpoint-card">
+          <div class="endpoint-title-row">
+            <h3>Enrutado por carreteras reales</h3>
+            <span class="free-badge">SIN CLAVE</span>
+          </div>
+          <p><strong>Generar y exportar GPX locales es gratuito y no requiere cuenta, API ni Internet.</strong> Este modo real es opcional: consulta el servidor público Valhalla/OpenStreetMap, requiere conexión y puede estar limitado o temporalmente indisponible.</p>
+          <label class="field">
+            <span>Endpoint Valhalla</span>
+            <input id="valhallaEndpoint" type="url" value="https://valhalla1.openstreetmap.de/route" />
+          </label>
+          <label class="checkbox-field">
+            <input id="autoRouteNewStages" type="checkbox" />
+            <span>Enrutar automáticamente al generar <b>(puede tardar varios minutos)</b></span>
+          </label>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+  <noscript><div class="fatal-static">JavaScript está desactivado. Actívalo para generar y exportar las etapas.</div></noscript>
+
+  <!-- Dependencia local: la exportación ZIP funciona incluso si un CDN está bloqueado. -->
+  <script defer src="vendor/jszip.min.js"></script>
+
+  <!-- Núcleo local. No depende de Internet para generar, visualizar o exportar etapas. -->
+  <script defer src="config.js"></script>
+  <script defer src="js/vendor-loader.js"></script>
+  <script defer src="js/catalog.js"></script>
+  <script defer src="js/generator.js"></script>
+  <script defer src="js/export.js"></script>
+  <script defer src="js/profile.js"></script>
+  <script defer src="js/map3d.js"></script>
+  <script defer src="js/app.js"></script>
+</body>
+</html>

@@ -673,6 +673,118 @@
     };
   }
 
+  function yieldToBrowser() {
+    return new Promise((resolve) => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
+      else setTimeout(resolve, 0);
+    });
+  }
+
+  async function generateTourAsync(inputConfig, onProgress, shouldCancel) {
+    const config = normalizeConfig(inputConfig);
+    const report = typeof onProgress === 'function' ? onProgress : () => {};
+    const cancelled = typeof shouldCancel === 'function' ? shouldCancel : () => false;
+
+    report({ phase: 'planning', completed: 0, total: config.stageCount, percent: 2, detail: 'Validando condicionantes y construyendo el calendario deportivo…' });
+    await yieldToBrowser();
+    if (cancelled()) throw new Error('Generación cancelada por el usuario.');
+
+    const rng = new RNG(config.seed);
+    const types = buildTypePool(config, rng);
+    const targetDistances = assignTargetDistances(types, config, rng);
+    const countries = countriesForTour(config.mode, config.stageCount, rng);
+    const mountainIndices = types
+      .map((type, index) => ['medium_mountain', 'high_mountain'].includes(type) ? index : null)
+      .filter((index) => index !== null)
+      .sort((a, b) => b - a);
+    const summitIndices = new Set(mountainIndices.slice(0, Math.min(config.summitCount, mountainIndices.length)));
+    const stages = [];
+    const recentRegions = [];
+
+    report({ phase: 'planning', completed: 0, total: config.stageCount, percent: 7, detail: `Plan preparado: ${config.stageCount} etapas, ${Math.round(config.totalDistance)} km objetivo.` });
+    await yieldToBrowser();
+
+    for (let i = 0; i < config.stageCount; i++) {
+      if (cancelled()) throw new Error('Generación cancelada por el usuario.');
+      const typeLabel = CATALOG.stageTypes[types[i]]?.label || types[i];
+      report({
+        phase: 'stage',
+        completed: i,
+        total: config.stageCount,
+        percent: 8 + (i / Math.max(1, config.stageCount)) * 82,
+        stageNumber: i + 1,
+        detail: `Etapa ${i + 1}/${config.stageCount}: buscando una ${typeLabel.toLowerCase()} coherente en ${CATALOG.countries[countries[i]].label}…`
+      });
+      await yieldToBrowser();
+
+      const stageSeed = config.seed + (i + 1) * 104729;
+      const localRng = new RNG(stageSeed);
+      const allRegions = CATALOG.countries[countries[i]].regions;
+      let compatibleRegions = allRegions.filter((region) => typeCompatible(region, types[i]));
+      if (!compatibleRegions.length) compatibleRegions = allRegions.slice();
+      const freshRegions = compatibleRegions.filter((region) => !recentRegions.slice(-2).includes(region.id));
+      const orderedRegions = localRng.shuffle([...(freshRegions.length ? freshRegions : compatibleRegions)]);
+      const remainingRegions = localRng.shuffle(compatibleRegions.filter((region) => !orderedRegions.includes(region)));
+      orderedRegions.push(...remainingRegions);
+
+      let bestStage = null;
+      let bestScore = Infinity;
+      const maximumRegionTrials = Math.min(5, orderedRegions.length);
+      for (let regionTrial = 0; regionTrial < maximumRegionTrials; regionTrial++) {
+        if (cancelled()) throw new Error('Generación cancelada por el usuario.');
+        const region = orderedRegions[regionTrial];
+        const candidate = buildStage(
+          i,
+          types[i],
+          countries[i],
+          region,
+          targetDistances[i],
+          summitIndices.has(i),
+          stageSeed + regionTrial * 32452843
+        );
+        const ratio = candidate.distanceKm / Math.max(targetDistances[i], 1);
+        const distanceError = Math.abs(candidate.distanceKm - targetDistances[i]) / Math.max(targetDistances[i], 1);
+        const maximumError = candidate.distanceKm > config.maxStageDistance
+          ? (candidate.distanceKm - config.maxStageDistance) / config.maxStageDistance
+          : 0;
+        const repeatPenalty = recentRegions.slice(-2).includes(region.id) ? 0.12 : 0;
+        const score = distanceError + maximumError * 12 + repeatPenalty + (ratio < 0.68 ? (0.68 - ratio) * 3 : 0);
+        if (score < bestScore) {
+          bestScore = score;
+          bestStage = candidate;
+        }
+        if (distanceError < 0.06 && maximumError === 0) break;
+      }
+
+      recentRegions.push(bestStage.regionId);
+      stages.push(bestStage);
+      report({
+        phase: 'stage-complete',
+        completed: i + 1,
+        total: config.stageCount,
+        percent: 8 + ((i + 1) / Math.max(1, config.stageCount)) * 82,
+        stageNumber: i + 1,
+        stage: bestStage,
+        detail: `Etapa ${i + 1} lista: ${bestStage.routeLabel} · ${bestStage.distanceKm.toFixed(1)} km · ${Math.round(bestStage.ascentM)} m+.`
+      });
+      await yieldToBrowser();
+    }
+
+    report({ phase: 'finalizing', completed: config.stageCount, total: config.stageCount, percent: 94, detail: 'Calculando resumen, puertos, sprints y preparando los GPX…' });
+    await yieldToBrowser();
+
+    const tour = {
+      id: `tour-${config.seed}`,
+      title: config.mode === 'europe' ? 'Gran Vuelta Europea' : `Gran Vuelta de ${CATALOG.countries[config.mode].label}`,
+      createdAt: new Date().toISOString(),
+      config,
+      stages
+    };
+
+    report({ phase: 'complete', completed: config.stageCount, total: config.stageCount, percent: 100, detail: `${tour.title} preparada con ${tour.stages.length} etapas.` });
+    return tour;
+  }
+
   function regenerateStage(tour, index, seedOffset) {
     const previous = tour.stages[index];
     const seed = previous.seed + (seedOffset || 1) * 7919;
@@ -735,22 +847,48 @@
     return sampled;
   }
 
+  async function fetchWithTimeout(url, options, timeoutMs) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    try {
+      return await fetch(url, { ...options, signal: controller?.signal });
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error(`Tiempo de espera agotado tras ${Math.round(timeoutMs / 1000)} s.`);
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async function fetchValhalla(endpoint, payload) {
     const headers = { 'Accept': 'application/json' };
     if (window.APP_CONFIG?.valhallaClientId) headers['X-Client-Id'] = window.APP_CONFIG.valhallaClientId;
+    const timeoutMs = Math.max(5000, Number(window.APP_CONFIG?.routeRequestTimeoutMs) || 15000);
+    let postError = null;
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchWithTimeout(endpoint, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      });
+      }, timeoutMs);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.json();
-    } catch (postError) {
+    } catch (error) {
+      postError = error;
+      // A timeout indicates that the host itself is not responding; retrying the same
+      // request as GET would merely double the waiting time. GET remains useful for
+      // immediate POST/CORS/method failures.
+      if (/Tiempo de espera agotado/i.test(error?.message || '')) throw error;
+    }
+
+    try {
       const url = `${endpoint}${endpoint.includes('?') ? '&' : '?'}json=${encodeURIComponent(JSON.stringify(payload))}`;
-      const response = await fetch(url, { headers: { 'Accept': 'application/json' } });
-      if (!response.ok) throw new Error(`Valhalla respondió HTTP ${response.status}. ${postError.message}`);
+      const response = await fetchWithTimeout(url, { headers }, timeoutMs);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.json();
+    } catch (getError) {
+      const cause = getError?.message || postError?.message || 'Error de red o CORS';
+      throw new Error(`Valhalla no respondió (${cause}). Comprueba Internet, CORS o disponibilidad del servidor público.`);
     }
   }
 
@@ -871,6 +1009,7 @@
   window.StageGenerator = {
     RNG,
     generateTour,
+    generateTourAsync,
     regenerateStage,
     routeStage,
     parseNaturalConditions,
